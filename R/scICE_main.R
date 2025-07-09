@@ -17,7 +17,7 @@
 #' and provides automated framework for finding consistent clusters.
 #'
 #' @param object A Seurat object containing single-cell data
-#' @param graph_name Name of the graph to use for clustering (default: "snn")
+#' @param graph_name Name of the graph to use for clustering. If NULL, will use the default SNN graph from the active assay (default: NULL)
 #' @param cluster_range Vector of cluster numbers to test (default: 1:20)
 #' @param n_workers Number of parallel workers to use (default: 10)
 #' @param n_trials Number of clustering trials per resolution (default: 15)
@@ -61,7 +61,7 @@
 #'
 #' @export
 scICE_clustering <- function(object, 
-                            graph_name = "snn",
+                            graph_name = NULL,
                             cluster_range = 1:20,
                             n_workers = 10,
                             n_trials = 15,
@@ -80,12 +80,22 @@ scICE_clustering <- function(object,
     stop("object must be a Seurat object")
   }
   
+  # Get default graph name if not provided
+  if (is.null(graph_name)) {
+    default_assay <- DefaultAssay(object)
+    graph_name <- paste0(default_assay, "_snn")
+  }
+  
+  # Check if graph exists in object
   if (!(graph_name %in% names(object@graphs))) {
-    stop(paste("Graph", graph_name, "not found in Seurat object"))
+    stop(sprintf("Graph '%s' not found in Seurat object. Available graphs: %s", 
+                graph_name, 
+                paste(names(object@graphs), collapse = ", ")))
   }
   
   if (verbose) {
     message("Starting scICE clustering analysis...")
+    message(paste("Using graph:", graph_name))
     message(paste("Testing cluster range:", paste(range(cluster_range), collapse = "-")))
     message(paste("Using", n_workers, "parallel workers"))
   }

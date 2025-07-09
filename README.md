@@ -85,6 +85,7 @@ scice_results <- scICE_clustering(
   cluster_range = 2:15,
   n_workers = 4,
   verbose = TRUE
+  # graph_name will automatically use the default assay's SNN graph (e.g., "RNA_snn")
 )
 
 # Visualize results
@@ -120,7 +121,7 @@ results <- scICE_clustering(
 # Fine-tuned parameters for large datasets
 results <- scICE_clustering(
   object = large_seurat_object,
-  graph_name = "snn",             # Graph to use ("snn", "knn", etc.)
+  graph_name = "RNA_snn",         # Optional: specify graph name (defaults to active assay's SNN graph)
   cluster_range = 5:12,           # Focused range for efficiency
   objective_function = "CPM",     # "CPM" or "modularity"
   beta = 0.1,                     # Leiden beta parameter
@@ -233,7 +234,11 @@ results <- scICE_clustering(
 
 ### Common Issues
 
-1. **"Graph not found" error**: Run `FindNeighbors()` on your Seurat object first
+1. **"Graph not found" error**: 
+   - Run `FindNeighbors()` on your Seurat object first
+   - By default, scICER uses the SNN graph from the active assay (e.g., "RNA_snn")
+   - You can check available graphs with `names(your_seurat_object@graphs)`
+   - Specify a different graph with the `graph_name` parameter if needed
 2. **No consistent clusters found**: Try adjusting `ic_threshold` (e.g., 1.01) or expanding `cluster_range`
 3. **Memory issues**: Reduce `n_workers`, `n_trials`, or `cluster_range` 
 4. **Slow performance**: Install the `leiden` package and increase `n_workers`
