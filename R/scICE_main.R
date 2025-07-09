@@ -7,6 +7,9 @@
 #' @importFrom methods inherits
 #' @importFrom stats setNames
 #' @importFrom utils getFromNamespace
+#' @importFrom foreach getDoParRegistered
+#' @importFrom parallel makeCluster stopCluster detectCores
+#' @importFrom doParallel registerDoParallel
 #'
 #' Single-cell Inconsistency-based Clustering Evaluation (scICE)
 #'
