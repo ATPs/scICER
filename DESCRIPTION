@@ -20,7 +20,7 @@ Imports:
     Seurat (>= 4.0.0),
     SeuratObject,
     igraph,
-    Matrix,
+    Matrix (>= 1.5.0),
     parallel,
     foreach,
     doParallel,

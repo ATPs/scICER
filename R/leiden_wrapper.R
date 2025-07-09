@@ -52,9 +52,9 @@ graph_to_igraph <- function(seurat_graph) {
   # Convert sparse matrix to igraph
   # Seurat graphs are typically stored as sparse matrices
   if (inherits(seurat_graph, "dgCMatrix") || inherits(seurat_graph, "Matrix")) {
-    # Get non-zero entries
-    indices <- which(seurat_graph != 0, arr.ind = TRUE)
-    weights <- seurat_graph[indices]
+    # Get non-zero entries using Matrix package methods
+    indices <- Matrix::which(seurat_graph > 0, arr.ind = TRUE)
+    weights <- as.vector(seurat_graph[indices])
     
     # Create edge list (convert to 0-based for igraph)
     edges <- as.vector(t(indices - 1))
