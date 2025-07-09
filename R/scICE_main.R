@@ -1,3 +1,13 @@
+#' @import Seurat
+#' @import SeuratObject
+#' @import igraph
+#' @import parallel
+#' @import foreach
+#' @import doParallel
+#' @importFrom methods inherits
+#' @importFrom stats setNames
+#' @importFrom utils getFromNamespace
+#'
 #' Single-cell Inconsistency-based Clustering Evaluation (scICE)
 #'
 #' @description
