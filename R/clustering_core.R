@@ -315,11 +315,11 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
       excluded = logical(),
       exclusion_reason = character()
     )
-  })
+     })
   
   # Sort by cluster number (only if the column exists and there are rows)
   if (nrow(results_dt) > 0 && "cluster_number" %in% colnames(results_dt)) {
-    results_dt <- results_dt[order(results_dt$cluster_number)]
+    data.table::setorder(results_dt, cluster_number)
   }
   
   # Convert back to list format for compatibility - with defensive programming
