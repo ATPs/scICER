@@ -108,8 +108,15 @@ plot_ic(scice_results)
 # Extract consistent clustering labels
 seurat_obj <- get_robust_labels(scice_results, return_seurat = TRUE)
 
-# Visualize with consistent clusters
-DimPlot(seurat_obj, group.by = "clusters_7")  # Replace 7 with your cluster number
+# Visualize with consistent clusters, cluster ange from 3 to 15
+xl.fig <- list()
+for (n in 3:15) {
+  if (paste0("clusters_", n) %in% colnames(seurat_obj@meta.data))
+    xl.fig[[n]] <- DimPlot(seurat_obj, group.by = paste0("clusters_", n), label = TRUE) + ggtitle(paste("Clusters:", n))
+}
+
+cowplot::plot_grid(plotlist = xl.fig, ncol = 3) 
+
 ```
 
 ## Detailed Usage
