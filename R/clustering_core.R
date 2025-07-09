@@ -231,8 +231,10 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
   # Combine results
   results_dt <- data.table::rbindlist(range_results)
   
-  # Convert to named list format
-  gamma_dict <- as.list(data.table::setkey(results_dt, cluster_number)[, .(bounds = list(c(left_bound, right_bound))), by = cluster_number]$bounds)
+  # Convert to named list format - fixing the data.table syntax
+  gamma_dict <- lapply(seq_len(nrow(results_dt)), function(i) {
+    c(results_dt$left_bound[i], results_dt$right_bound[i])
+  })
   names(gamma_dict) <- as.character(results_dt$cluster_number)
   
   return(gamma_dict)
