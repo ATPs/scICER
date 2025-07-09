@@ -69,9 +69,9 @@ graph_to_igraph <- function(seurat_graph, verbose = FALSE) {
       }
     }
     
-    # Create edge list (0-based for igraph)
-    # Convert indices to 0-based and keep as matrix
-    edges_matrix <- indices - 1
+    # Create edge list (1-based for igraph)
+    # Keep indices as 1-based since igraph in R uses 1-based indexing
+    edges_matrix <- indices
     
     if (verbose) {
       message(sprintf("Created edge list with %d edges", nrow(edges_matrix)))
@@ -98,12 +98,6 @@ graph_to_igraph <- function(seurat_graph, verbose = FALSE) {
     if (nrow(edges_matrix) > 0) {
       if (verbose) {
         message("Adding edges to graph...")
-      }
-      
-      # Validate edge indices
-      if (any(edges_matrix < 0) || any(edges_matrix >= n_vertices)) {
-        stop(sprintf("Invalid edge indices: range [%d, %d], but graph has %d vertices", 
-                    min(edges_matrix), max(edges_matrix), n_vertices))
       }
       
       # Add edges from the matrix

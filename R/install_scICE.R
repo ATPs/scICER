@@ -9,9 +9,9 @@ install_if_missing <- function(packages, repo = "CRAN") {
     if (!requireNamespace(pkg, quietly = TRUE)) {
       message(paste("Installing", pkg, "from", repo))
       if (repo == "CRAN") {
-        install.packages(pkg, dependencies = TRUE)
+        install.packages(pkg, dependencies = TRUE, repos = "https://cloud.r-project.org")
       } else if (repo == "Bioconductor") {
-        BiocManager::install(pkg)
+        BiocManager::install(pkg, update = FALSE, ask = FALSE)
       }
     } else {
       message(paste(pkg, "is already installed"))
@@ -25,7 +25,7 @@ install_scICE <- function(install_optional = TRUE) {
   
   # Install BiocManager if needed
   if (!requireNamespace("BiocManager", quietly = TRUE)) {
-    install.packages("BiocManager")
+    install.packages("BiocManager", repos = "https://cloud.r-project.org")
   }
   
   # Required packages from CRAN
@@ -77,16 +77,9 @@ install_scICE <- function(install_optional = TRUE) {
   }
   
   message("All dependencies installed successfully!")
-  message("You can now load scICE using: devtools::load_all('path/to/scICE')")
-  message("Or install as a package using: devtools::install_local('path/to/scICE')")
   
   return(TRUE)
 }
 
 # Run installation if script is executed directly
-if (interactive()) {
-  install_scICE(install_optional = TRUE)
-} else {
-  # When sourced, just define the function
-  message("scICE installation function loaded. Run install_scICE() to install dependencies.")
-} 
+install_scICE(install_optional = TRUE) 

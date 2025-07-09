@@ -4,10 +4,12 @@
 \alias{graph_to_igraph}
 \title{Convert Seurat graph to igraph object}
 \usage{
-graph_to_igraph(seurat_graph)
+graph_to_igraph(seurat_graph, verbose = FALSE)
 }
 \arguments{
 \item{seurat_graph}{Graph from Seurat object (typically SNN or KNN graph)}
+
+\item{verbose}{Whether to print debug messages (default: FALSE)}
 }
 \value{
 igraph object
