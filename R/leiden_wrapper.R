@@ -70,13 +70,19 @@ graph_to_igraph <- function(seurat_graph, verbose = FALSE) {
     }
     
     # Create edge list (0-based for igraph)
-    # Each row in indices is (from, to), so we need to subtract 1 from each index
-    edges <- c(t(indices - 1))  # Flatten the matrix row by row
+    # Convert indices to 0-based and keep as matrix
+    edges_matrix <- indices - 1
     
     if (verbose) {
-      message(sprintf("Created edge list with %d edges", length(edges)/2))
-      if (length(edges) > 0) {
-        message(sprintf("Vertex index range: [%d, %d]", min(edges), max(edges)))
+      message(sprintf("Created edge list with %d edges", nrow(edges_matrix)))
+      if (nrow(edges_matrix) > 0) {
+        message(sprintf("Vertex index range: [%d, %d]", 
+                       min(edges_matrix), max(edges_matrix)))
+        message("First few edges (from, to):")
+        head_edges <- utils::head(edges_matrix, 5)
+        for(i in seq_len(nrow(head_edges))) {
+          message(sprintf("  %d -> %d", head_edges[i,1], head_edges[i,2]))
+        }
       }
     }
     
@@ -89,21 +95,19 @@ graph_to_igraph <- function(seurat_graph, verbose = FALSE) {
     igraph_obj <- igraph::make_empty_graph(n = n_vertices, directed = FALSE)
     
     # Add edges with weights if there are any edges
-    if (length(edges) > 0) {
+    if (nrow(edges_matrix) > 0) {
       if (verbose) {
         message("Adding edges to graph...")
-        message(sprintf("First few edges: %s", 
-                       paste(utils::head(edges + 1, 10), collapse=", ")))  # +1 for 1-based display
       }
       
       # Validate edge indices
-      if (any(edges < 0) || any(edges >= n_vertices)) {
+      if (any(edges_matrix < 0) || any(edges_matrix >= n_vertices)) {
         stop(sprintf("Invalid edge indices: range [%d, %d], but graph has %d vertices", 
-                    min(edges), max(edges), n_vertices))
+                    min(edges_matrix), max(edges_matrix), n_vertices))
       }
       
-      # Add edges in pairs
-      igraph_obj <- igraph::add_edges(igraph_obj, edges)
+      # Add edges from the matrix
+      igraph_obj <- igraph::add_edges(igraph_obj, t(edges_matrix))
       igraph::E(igraph_obj)$weight <- weights
       
       if (verbose) {
