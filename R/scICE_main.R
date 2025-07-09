@@ -117,12 +117,20 @@ scICE_clustering <- function(object,
   # Get graph from Seurat object
   graph <- object@graphs[[graph_name]]
   
+  if (verbose) {
+    message("\nExtracting graph from Seurat object...")
+    message(sprintf("Graph class: %s", class(graph)[1]))
+    message(sprintf("Graph dimensions: %d x %d", nrow(graph), ncol(graph)))
+  }
+  
   # Convert to igraph object
-  igraph_obj <- graph_to_igraph(graph)
+  igraph_obj <- graph_to_igraph(graph, verbose = verbose)
   
   if (verbose) {
-    message("Graph extracted successfully")
-    message(paste("Graph has", vcount(igraph_obj), "vertices and", ecount(igraph_obj), "edges"))
+    message("\nGraph conversion complete")
+    message(sprintf("Graph has %d vertices and %d edges", 
+                   igraph::vcount(igraph_obj), 
+                   igraph::ecount(igraph_obj)))
   }
   
   # Perform clustering analysis

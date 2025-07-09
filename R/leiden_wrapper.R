@@ -46,29 +46,70 @@ leiden_clustering <- function(igraph_obj, resolution, objective_function,
 #' Convert Seurat graph to igraph object
 #'
 #' @param seurat_graph Graph from Seurat object (typically SNN or KNN graph)
+#' @param verbose Whether to print debug messages (default: FALSE)
 #' @return igraph object
 #' @keywords internal
-graph_to_igraph <- function(seurat_graph) {
+graph_to_igraph <- function(seurat_graph, verbose = FALSE) {
   # Convert sparse matrix to igraph
   # Seurat graphs are typically stored as sparse matrices
   if (inherits(seurat_graph, "dgCMatrix") || inherits(seurat_graph, "Matrix")) {
+    if (verbose) {
+      message("Converting sparse matrix to igraph...")
+      message(sprintf("Matrix dimensions: %d x %d", nrow(seurat_graph), ncol(seurat_graph)))
+    }
+    
     # Get non-zero entries using Matrix package methods
     indices <- Matrix::which(seurat_graph > 0, arr.ind = TRUE)
     weights <- as.vector(seurat_graph[indices])
+    
+    if (verbose) {
+      message(sprintf("Found %d non-zero entries", length(weights)))
+      if (length(weights) > 0) {
+        message(sprintf("Weight range: [%.4f, %.4f]", min(weights), max(weights)))
+      }
+    }
     
     # Create edge list (0-based for igraph)
     # Each row in indices is (from, to), so we need to subtract 1 from each index
     edges <- c(t(indices - 1))  # Flatten the matrix row by row
     
+    if (verbose) {
+      message(sprintf("Created edge list with %d edges", length(edges)/2))
+      if (length(edges) > 0) {
+        message(sprintf("Vertex index range: [%d, %d]", min(edges), max(edges)))
+      }
+    }
+    
     # Create igraph object
     n_vertices <- nrow(seurat_graph)
+    if (verbose) {
+      message(sprintf("Creating empty graph with %d vertices", n_vertices))
+    }
+    
     igraph_obj <- igraph::make_empty_graph(n = n_vertices, directed = FALSE)
     
     # Add edges with weights if there are any edges
     if (length(edges) > 0) {
+      if (verbose) {
+        message("Adding edges to graph...")
+        message(sprintf("First few edges: %s", 
+                       paste(utils::head(edges + 1, 10), collapse=", ")))  # +1 for 1-based display
+      }
+      
+      # Validate edge indices
+      if (any(edges < 0) || any(edges >= n_vertices)) {
+        stop(sprintf("Invalid edge indices: range [%d, %d], but graph has %d vertices", 
+                    min(edges), max(edges), n_vertices))
+      }
+      
       # Add edges in pairs
       igraph_obj <- igraph::add_edges(igraph_obj, edges)
       igraph::E(igraph_obj)$weight <- weights
+      
+      if (verbose) {
+        message(sprintf("Graph created successfully with %d vertices and %d edges", 
+                       igraph::vcount(igraph_obj), igraph::ecount(igraph_obj)))
+      }
     }
     
     return(igraph_obj)
