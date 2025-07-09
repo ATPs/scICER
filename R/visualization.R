@@ -30,68 +30,68 @@ NULL
 #' }
 plot_ic <- function(scice_results, threshold = 1.005, figure_size = c(10, 6),
                    title = "Clustering Consistency Analysis", show_threshold = TRUE) {
-  
+
   if (!inherits(scice_results, "scICE")) {
     stop("Input must be a scICE results object")
   }
-  
+
   if (length(scice_results$ic_vec) == 0) {
     stop("No IC results found in scICE object")
   }
-  
+
   # Prepare data for plotting
   plot_data <- data.frame(
-    cluster_number = rep(scice_results$n_cluster, 
+    cluster_number = rep(scice_results$n_cluster,
                         sapply(scice_results$ic_vec, length)),
     ic_score = unlist(scice_results$ic_vec)
   )
-  
+
   # Create the plot
-  p <- ggplot(plot_data, aes(x = factor(cluster_number), y = ic_score)) +
-    geom_boxplot(aes(group = cluster_number), 
-                 outlier.alpha = 0.6, 
-                 fill = "lightblue", 
+  p <- ggplot2::ggplot(plot_data, ggplot2::aes(x = factor(cluster_number), y = ic_score)) +
+    ggplot2::geom_boxplot(ggplot2::aes(group = cluster_number),
+                 outlier.alpha = 0.6,
+                 fill = "lightblue",
                  alpha = 0.7) +
-    geom_jitter(width = 0.2, alpha = 0.4, size = 0.8) +
-    scale_x_discrete(name = "Number of Clusters") +
-    scale_y_continuous(name = "Inconsistency (IC) Score",
+    ggplot2::geom_jitter(width = 0.2, alpha = 0.4, size = 0.8) +
+    ggplot2::scale_x_discrete(name = "Number of Clusters") +
+    ggplot2::scale_y_continuous(name = "Inconsistency (IC) Score",
                       limits = c(0.99, max(plot_data$ic_score) * 1.05)) +
-    labs(title = title,
+    ggplot2::labs(title = title,
          subtitle = paste("Lower IC scores indicate more consistent clustering.",
                          "Threshold:", threshold)) +
-    theme_minimal() +
-    theme(
-      plot.title = element_text(size = 14, face = "bold"),
-      plot.subtitle = element_text(size = 12),
-      axis.title = element_text(size = 12),
-      axis.text = element_text(size = 10),
-      panel.grid.minor = element_blank()
+    ggplot2::theme_minimal() +
+    ggplot2::theme(
+      plot.title = ggplot2::element_text(size = 14, face = "bold"),
+      plot.subtitle = ggplot2::element_text(size = 12),
+      axis.title = ggplot2::element_text(size = 12),
+      axis.text = ggplot2::element_text(size = 10),
+      panel.grid.minor = ggplot2::element_blank()
     )
-  
+
   # Add threshold line if requested
   if (show_threshold) {
-    p <- p + geom_hline(yintercept = threshold, 
-                       color = "red", 
-                       linetype = "dashed", 
+    p <- p + ggplot2::geom_hline(yintercept = threshold,
+                       color = "red",
+                       linetype = "dashed",
                        linewidth = 1) +
-             annotate("text", 
-                     x = length(unique(plot_data$cluster_number)) * 0.8, 
-                     y = threshold + 0.001, 
+             ggplot2::annotate("text",
+                     x = length(unique(plot_data$cluster_number)) * 0.8,
+                     y = threshold + 0.001,
                      label = paste("Threshold =", threshold),
-                     color = "red", 
+                     color = "red",
                      size = 3.5)
   }
-  
+
   # Highlight consistent clusters
   consistent_clusters <- scice_results$consistent_clusters
   if (length(consistent_clusters) > 0) {
     consistent_data <- plot_data[plot_data$cluster_number %in% consistent_clusters, ]
-    p <- p + geom_boxplot(data = consistent_data,
-                         aes(x = factor(cluster_number), y = ic_score),
-                         fill = "lightgreen", 
+    p <- p + ggplot2::geom_boxplot(data = consistent_data,
+                         ggplot2::aes(x = factor(cluster_number), y = ic_score),
+                         fill = "lightgreen",
                          alpha = 0.8)
   }
-  
+
   return(p)
 }
 
@@ -248,15 +248,15 @@ plot_stability <- function(scice_results, cluster_number = NULL) {
       stringsAsFactors = FALSE
     )
     
-    p <- ggplot(plot_data, aes(x = cluster_number, y = ic_score)) +
-      geom_point(aes(color = resolution), size = 3) +
-      geom_line(alpha = 0.6) +
-      scale_color_gradient(name = "Resolution", low = "blue", high = "red") +
-      scale_x_continuous(name = "Number of Clusters", 
-                        breaks = unique(plot_data$cluster_number)) +
-      scale_y_continuous(name = "IC Score") +
-      labs(title = "Clustering Stability Across Cluster Numbers") +
-      theme_minimal()
+    p <- ggplot2::ggplot(plot_data, ggplot2::aes(x = cluster_number, y = ic_score)) +
+      ggplot2::geom_point(ggplot2::aes(color = resolution), size = 3) +
+      ggplot2::geom_line(alpha = 0.6) +
+      ggplot2::scale_color_gradient(name = "Resolution", low = "blue", high = "red") +
+      ggplot2::scale_x_continuous(name = "Number of Clusters", 
+                                 breaks = unique(plot_data$cluster_number)) +
+      ggplot2::scale_y_continuous(name = "IC Score") +
+      ggplot2::labs(title = "Clustering Stability Across Cluster Numbers") +
+      ggplot2::theme_minimal()
       
   } else {
     # Plot specific cluster number
@@ -272,15 +272,15 @@ plot_stability <- function(scice_results, cluster_number = NULL) {
       bootstrap_sample = 1:length(ic_bootstrap)
     )
     
-    p <- ggplot(plot_data, aes(x = ic_score)) +
-      geom_histogram(bins = 30, fill = "lightblue", alpha = 0.7) +
-      geom_vline(xintercept = median(ic_bootstrap), 
-                color = "red", linetype = "dashed") +
-      scale_x_continuous(name = "IC Score") +
-      scale_y_continuous(name = "Frequency") +
-      labs(title = paste("IC Score Distribution for", cluster_number, "Clusters"),
-           subtitle = paste("Median IC:", round(median(ic_bootstrap), 4))) +
-      theme_minimal()
+    p <- ggplot2::ggplot(plot_data, ggplot2::aes(x = ic_score)) +
+      ggplot2::geom_histogram(bins = 30, fill = "lightblue", alpha = 0.7) +
+      ggplot2::geom_vline(ggplot2::aes(xintercept = median(ic_bootstrap)), 
+                        color = "red", linetype = "dashed") +
+      ggplot2::scale_x_continuous(name = "IC Score") +
+      ggplot2::scale_y_continuous(name = "Frequency") +
+      ggplot2::labs(title = paste("IC Score Distribution for", cluster_number, "Clusters"),
+                   subtitle = paste("Median IC:", round(median(ic_bootstrap), 4))) +
+      ggplot2::theme_minimal()
   }
   
   return(p)
