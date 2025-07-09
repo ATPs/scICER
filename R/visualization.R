@@ -39,19 +39,51 @@ plot_ic <- function(scice_results, threshold = 1.005, figure_size = c(10, 6),
     stop("No IC results found in scICE object")
   }
 
-  # Prepare data for plotting
+  # Handle both old results (without excluded info) and new results (with excluded info)
+  has_exclusion_info <- !is.null(scice_results$excluded)
+  
+  # Prepare data for plotting - only include non-excluded clusters with IC data
+  if (has_exclusion_info) {
+    valid_indices <- which(!scice_results$excluded & !is.na(scice_results$ic))
+  } else {
+    valid_indices <- which(!is.na(scice_results$ic))
+  }
+  
+  if (length(valid_indices) == 0) {
+    stop("No valid IC results found for plotting")
+  }
+  
+  # Create plot data for valid clusters
   plot_data <- data.frame(
-    cluster_number = rep(scice_results$n_cluster,
-                        sapply(scice_results$ic_vec, length)),
-    ic_score = unlist(scice_results$ic_vec)
+    cluster_number = rep(scice_results$n_cluster[valid_indices],
+                        sapply(scice_results$ic_vec[valid_indices], length)),
+    ic_score = unlist(scice_results$ic_vec[valid_indices])
   )
+  
+  # Determine consistent clusters
+  consistent_cluster_numbers <- character()
+  if (has_exclusion_info) {
+    consistent_indices <- which(!scice_results$excluded & scice_results$ic < threshold)
+    consistent_cluster_numbers <- scice_results$n_cluster[consistent_indices]
+  } else {
+    consistent_indices <- which(scice_results$ic < threshold)
+    consistent_cluster_numbers <- scice_results$n_cluster[consistent_indices]
+  }
+  
+  # Add consistency status to plot data
+  plot_data$is_consistent <- plot_data$cluster_number %in% consistent_cluster_numbers
 
   # Create the plot
   p <- ggplot2::ggplot(plot_data, ggplot2::aes(x = factor(cluster_number), y = ic_score)) +
-    ggplot2::geom_boxplot(ggplot2::aes(group = cluster_number),
+    ggplot2::geom_boxplot(ggplot2::aes(group = cluster_number, fill = is_consistent),
                  outlier.alpha = 0.6,
-                 fill = "lightblue",
                  alpha = 0.7) +
+    ggplot2::scale_fill_manual(
+      name = "Consistency",
+      values = c("TRUE" = "lightgreen", "FALSE" = "lightgray"),
+      labels = c("TRUE" = paste("Consistent (IC <", threshold, ")"), 
+                "FALSE" = paste("Inconsistent (IC ≥", threshold, ")"))
+    ) +
     ggplot2::geom_jitter(width = 0.2, alpha = 0.4, size = 0.8, height = 0) +
     ggplot2::scale_x_discrete(name = "Number of Clusters") +
     ggplot2::scale_y_continuous(name = "Inconsistency (IC) Score",
@@ -65,7 +97,8 @@ plot_ic <- function(scice_results, threshold = 1.005, figure_size = c(10, 6),
       plot.subtitle = ggplot2::element_text(size = 12),
       axis.title = ggplot2::element_text(size = 12),
       axis.text = ggplot2::element_text(size = 10),
-      panel.grid.minor = ggplot2::element_blank()
+      panel.grid.minor = ggplot2::element_blank(),
+      legend.position = "bottom"
     )
 
   # Add threshold line if requested
@@ -81,15 +114,15 @@ plot_ic <- function(scice_results, threshold = 1.005, figure_size = c(10, 6),
                      color = "red",
                      size = 3.5)
   }
-
-  # Highlight consistent clusters
-  consistent_clusters <- scice_results$consistent_clusters
-  if (length(consistent_clusters) > 0) {
-    consistent_data <- plot_data[plot_data$cluster_number %in% consistent_clusters, ]
-    p <- p + ggplot2::geom_boxplot(data = consistent_data,
-                         ggplot2::aes(x = factor(cluster_number), y = ic_score),
-                         fill = "lightgreen",
-                         alpha = 0.8)
+  
+  # Add information about excluded clusters if available
+  if (has_exclusion_info) {
+    excluded_clusters <- scice_results$n_cluster[scice_results$excluded]
+    if (length(excluded_clusters) > 0) {
+      subtitle_text <- paste("Lower IC scores indicate more consistent clustering. Threshold:", threshold,
+                            "\nExcluded clusters:", paste(excluded_clusters, collapse = ", "))
+      p <- p + ggplot2::labs(subtitle = subtitle_text)
+    }
   }
 
   return(p)
@@ -125,11 +158,31 @@ get_robust_labels <- function(scice_results, threshold = 1.005, return_seurat = 
     stop("Input must be a scICE results object")
   }
   
-  # Find consistent cluster numbers
-  consistent_indices <- which(scice_results$ic < threshold)
+  # Handle both old results (without excluded info) and new results (with excluded info)
+  has_exclusion_info <- !is.null(scice_results$excluded)
+  
+  # Find consistent cluster numbers, excluding already-excluded clusters
+  if (has_exclusion_info) {
+    # For new format: only consider non-excluded clusters with valid IC scores
+    valid_indices <- which(!scice_results$excluded & !is.na(scice_results$ic))
+    consistent_indices <- valid_indices[scice_results$ic[valid_indices] < threshold]
+  } else {
+    # For old format: use all available clusters
+    consistent_indices <- which(!is.na(scice_results$ic) & scice_results$ic < threshold)
+  }
   
   if (length(consistent_indices) == 0) {
-    warning("No cluster numbers meet the consistency threshold")
+    if (has_exclusion_info) {
+      excluded_clusters <- scice_results$n_cluster[scice_results$excluded]
+      if (length(excluded_clusters) > 0) {
+        warning(paste("No cluster numbers meet the consistency threshold.",
+                     "Excluded clusters:", paste(excluded_clusters, collapse = ", ")))
+      } else {
+        warning("No cluster numbers meet the consistency threshold")
+      }
+    } else {
+      warning("No cluster numbers meet the consistency threshold")
+    }
     return(NULL)
   }
   
@@ -146,12 +199,24 @@ get_robust_labels <- function(scice_results, threshold = 1.005, return_seurat = 
     cluster_num <- consistent_clusters[i]
     cluster_labels <- scice_results$best_labels[[consistent_indices[i]]]
     
+    # Skip if labels are NULL (shouldn't happen for consistent clusters, but be safe)
+    if (is.null(cluster_labels)) {
+      warning(paste("No labels found for cluster number", cluster_num))
+      next
+    }
+    
     # Convert to 1-based indexing for R
     cluster_labels <- cluster_labels + 1
     
     # Add to data frame
     col_name <- paste0("clusters_", cluster_num)
     output_df[[col_name]] <- cluster_labels
+  }
+  
+  # Check if we actually added any clustering columns
+  if (ncol(output_df) == 1) {
+    warning("No valid clustering results could be extracted")
+    return(NULL)
   }
   
   if (return_seurat) {
@@ -190,11 +255,31 @@ extract_consistent_clusters <- function(scice_results, threshold = 1.005) {
     stop("Input must be a scICE results object")
   }
   
-  # Find consistent cluster numbers
-  consistent_indices <- which(scice_results$ic < threshold)
+  # Handle both old results (without excluded info) and new results (with excluded info)
+  has_exclusion_info <- !is.null(scice_results$excluded)
+  
+  # Find consistent cluster numbers, excluding already-excluded clusters
+  if (has_exclusion_info) {
+    # For new format: only consider non-excluded clusters with valid IC scores
+    valid_indices <- which(!scice_results$excluded & !is.na(scice_results$ic))
+    consistent_indices <- valid_indices[scice_results$ic[valid_indices] < threshold]
+  } else {
+    # For old format: use all available clusters
+    consistent_indices <- which(!is.na(scice_results$ic) & scice_results$ic < threshold)
+  }
   
   if (length(consistent_indices) == 0) {
-    warning("No cluster numbers meet the consistency threshold")
+    if (has_exclusion_info) {
+      excluded_clusters <- scice_results$n_cluster[scice_results$excluded]
+      if (length(excluded_clusters) > 0) {
+        warning(paste("No cluster numbers meet the consistency threshold.",
+                     "Excluded clusters:", paste(excluded_clusters, collapse = ", ")))
+      } else {
+        warning("No cluster numbers meet the consistency threshold")
+      }
+    } else {
+      warning("No cluster numbers meet the consistency threshold")
+    }
     return(data.frame())
   }
   
@@ -223,6 +308,21 @@ extract_consistent_clusters <- function(scice_results, threshold = 1.005) {
   # Sort by cluster number
   summary_df <- summary_df[order(summary_df$cluster_number), ]
   rownames(summary_df) <- NULL
+  
+  # Add summary information as attributes
+  if (has_exclusion_info) {
+    excluded_count <- sum(scice_results$excluded)
+    tested_count <- length(scice_results$n_cluster)
+    consistent_count <- nrow(summary_df)
+    
+    attr(summary_df, "summary_info") <- list(
+      total_tested = tested_count,
+      excluded = excluded_count,
+      inconsistent = tested_count - excluded_count - consistent_count,
+      consistent = consistent_count,
+      threshold_used = threshold
+    )
+  }
   
   return(summary_df)
 }

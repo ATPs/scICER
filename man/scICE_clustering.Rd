@@ -48,6 +48,8 @@ scICE_clustering(object, cluster_range = 2:10, n_workers = max(1, parallel::dete
       \item Number of stable solutions found
       \item Optimization iteration progress
       \item Summary of consistent cluster numbers identified
+      \item List of excluded cluster numbers and reasons for exclusion
+      \item List of inconsistent cluster numbers (tested but above threshold)
       \item Quality metrics for each clustering solution
     }}
 }
@@ -67,7 +69,12 @@ Returns a list with class "scICE" containing:
   \item{cell_names}{Vector of cell names}
   \item{consistent_clusters}{Vector of cluster numbers meeting consistency threshold}
   \item{graph_name}{Name of the graph used for clustering}
+  \item{cluster_range_tested}{Original cluster range that was tested}
+  \item{excluded}{Logical vector indicating which clusters were excluded}
+  \item{exclusion_reason}{Character vector explaining why clusters were excluded}
 }
+
+The function now includes information about all attempted cluster numbers, including those that were excluded due to instability or failed resolution parameter search. This allows users to understand why certain cluster numbers are missing from the results.
 }
 \description{
 Performs scICER (single-cell Inconsistency-based Clustering Evaluation in R) analysis on a Seurat object to identify stable clustering solutions. The function implements parallel processing and comprehensive stability assessment through bootstrap analysis.

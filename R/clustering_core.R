@@ -35,7 +35,9 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
     best_labels = list(),
     n_iter = integer(),
     mei = list(),
-    k = integer()
+    k = integer(),
+    excluded = logical(),
+    exclusion_reason = character()
   )
   
   # Determine resolution search bounds
@@ -61,7 +63,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   
   cluster_filter_results <- parallel::mclapply(cluster_range, function(cluster_num) {
     if (!(as.character(cluster_num) %in% names(gamma_dict))) {
-      return(list(excluded = TRUE, cluster_num = cluster_num))
+      return(list(excluded = TRUE, cluster_num = cluster_num, reason = "resolution_search_failed"))
     }
     
     gamma_range <- gamma_dict[[as.character(cluster_num)]]
@@ -80,8 +82,9 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
     
     ic_scores <- unlist(ic_scores)
     excluded <- min(ic_scores, na.rm = TRUE) >= remove_threshold
+    reason <- if (excluded) "high_inconsistency" else "passed_filtering"
     
-    return(list(excluded = excluded, cluster_num = cluster_num))
+    return(list(excluded = excluded, cluster_num = cluster_num, reason = reason))
   }, mc.cores = n_workers)
   
   excluded_numbers <- sapply(cluster_filter_results, function(x) if(x$excluded) x$cluster_num else NULL)
@@ -93,9 +96,43 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   
   valid_clusters <- setdiff(cluster_range, excluded_numbers)
   
+  # Create entries for excluded clusters
+  excluded_entries <- lapply(cluster_filter_results, function(x) {
+    if (x$excluded) {
+      return(data.table::data.table(
+        cluster_number = x$cluster_num,
+        gamma = NA_real_,
+        labels = list(NULL),
+        ic = NA_real_,
+        ic_vec = list(NULL),
+        best_labels = list(NULL),
+        n_iter = NA_integer_,
+        mei = list(NULL),
+        k = NA_integer_,
+        excluded = TRUE,
+        exclusion_reason = x$reason
+      ))
+    }
+    return(NULL)
+  })
+  excluded_entries <- data.table::rbindlist(excluded_entries[!sapply(excluded_entries, is.null)])
+  
   if (length(valid_clusters) == 0) {
     if (verbose) message("No valid cluster numbers found")
-    return(NULL)
+    # Return results with only excluded clusters
+    return(list(
+      gamma = excluded_entries$gamma,
+      labels = excluded_entries$labels,
+      ic = excluded_entries$ic,
+      ic_vec = excluded_entries$ic_vec,
+      n_cluster = excluded_entries$cluster_number,
+      best_labels = excluded_entries$best_labels,
+      n_iter = excluded_entries$n_iter,
+      mei = excluded_entries$mei,
+      k = excluded_entries$k,
+      excluded = excluded_entries$excluded,
+      exclusion_reason = excluded_entries$exclusion_reason
+    ))
   }
   
   # Optimize clustering for each valid cluster number in parallel
@@ -129,14 +166,28 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
         best_labels = list(result$best_labels),
         n_iter = result$n_iterations,
         mei = list(mei_scores),
-        k = result$k
+        k = result$k,
+        excluded = FALSE,
+        exclusion_reason = "none"
       ))
     }
     return(NULL)
   }, mc.cores = n_workers)
   
-  # Combine results
-  results_dt <- data.table::rbindlist(cluster_results[!sapply(cluster_results, is.null)])
+  # Combine successful results
+  successful_results <- data.table::rbindlist(cluster_results[!sapply(cluster_results, is.null)])
+  
+  # Combine all results (excluded + successful)
+  if (nrow(excluded_entries) > 0 && nrow(successful_results) > 0) {
+    results_dt <- data.table::rbindlist(list(excluded_entries, successful_results))
+  } else if (nrow(excluded_entries) > 0) {
+    results_dt <- excluded_entries
+  } else {
+    results_dt <- successful_results
+  }
+  
+  # Sort by cluster number
+  results_dt <- results_dt[order(cluster_number)]
   
   # Convert back to list format for compatibility
   return(list(
@@ -148,7 +199,9 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
     best_labels = results_dt$best_labels,
     n_iter = results_dt$n_iter,
     mei = results_dt$mei,
-    k = results_dt$k
+    k = results_dt$k,
+    excluded = results_dt$excluded,
+    exclusion_reason = results_dt$exclusion_reason
   ))
 }
 

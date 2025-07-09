@@ -152,12 +152,37 @@ scICE_clustering <- function(object,
   # Add cell names to results
   results$cell_names <- Cells(object)
   
-  # Determine consistent clusters
-  results$consistent_clusters <- which(results$ic < ic_threshold)
+  # Store original cluster range for reference
+  results$cluster_range_tested <- cluster_range
   
-  if (verbose) {
-    message(paste("Analysis complete. Found", length(results$consistent_clusters), 
-                  "consistent cluster numbers:", paste(results$consistent_clusters, collapse = ", ")))
+  # Determine consistent clusters using actual cluster numbers, not indices
+  if (!is.null(results) && !is.null(results$ic) && length(results$ic) > 0) {
+    consistent_indices <- which(results$ic < ic_threshold)
+    results$consistent_clusters <- results$n_cluster[consistent_indices]
+    
+    if (verbose) {
+      message(paste("Analysis complete. Found", length(results$consistent_clusters), 
+                    "consistent cluster numbers:", paste(results$consistent_clusters, collapse = ", ")))
+      
+      # Report excluded clusters
+      excluded_clusters <- setdiff(cluster_range, results$n_cluster)
+      if (length(excluded_clusters) > 0) {
+        message(paste("Excluded", length(excluded_clusters), "cluster numbers due to instability:", 
+                      paste(excluded_clusters, collapse = ", ")))
+      }
+      
+      # Report tested but inconsistent clusters
+      inconsistent_clusters <- setdiff(results$n_cluster, results$consistent_clusters)
+      if (length(inconsistent_clusters) > 0) {
+        message(paste("Found", length(inconsistent_clusters), "inconsistent cluster numbers:", 
+                      paste(inconsistent_clusters, collapse = ", ")))
+      }
+    }
+  } else {
+    results$consistent_clusters <- integer(0)
+    if (verbose) {
+      message("Analysis complete. No consistent cluster numbers found.")
+    }
   }
   
   # Add object reference for downstream analysis

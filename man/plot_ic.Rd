@@ -22,7 +22,9 @@ Returns a ggplot2 object containing:
   \item Boxplots showing IC score distributions for each cluster number
   \item Individual points showing all IC scores (with jitter)
   \item Optional threshold line in red
-  \item Highlighted boxes in green for consistent clusters
+  \item Color-coded boxes: green for consistent clusters (IC < threshold), gray for inconsistent clusters
+  \item Legend indicating consistency status
+  \item Information about excluded clusters in subtitle (if applicable)
   \item Customized theme and labels
 }
 
@@ -39,18 +41,24 @@ The plot includes several visual elements:
   \item Boxplots showing the distribution of IC scores
   \item Individual points with jitter to show all data
   \item Optional threshold line with label
-  \item Color-coding to highlight consistent clusters
+  \item Color-coding to distinguish consistent vs inconsistent clusters
   \item Clear labels and gridlines
+  \item Legend explaining color coding
+  \item Information about excluded clusters (if any)
 }
 
 Visual features:
 \itemize{
-  \item Light blue boxplots with transparency
-  \item Green highlighting for consistent clusters
+  \item Green boxplots for consistent clusters (IC < threshold)
+  \item Gray boxplots for inconsistent clusters (IC ≥ threshold)
   \item Red dashed line for threshold
+  \item Legend at bottom explaining color coding
   \item Minimal theme with removed minor gridlines
   \item Properly scaled axes with padding
+  \item Subtitle includes information about excluded clusters
 }
+
+The function automatically handles both old result formats (without exclusion information) and new result formats (with detailed exclusion information). Only clusters that were successfully tested and have IC scores are displayed in the plot.
 
 Customization options:
 \itemize{
