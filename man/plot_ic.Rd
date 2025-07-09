@@ -89,4 +89,4 @@ ggplot2::ggsave("clustering_results.pdf", width = 10, height = 6)
 \seealso{
 \code{\link{scICE_clustering}}, \code{\link{extract_consistent_clusters}}
 }
-\export 
+%\export 

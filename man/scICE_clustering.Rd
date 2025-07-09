@@ -132,4 +132,4 @@ plot_stability(results)
 \seealso{
 \code{\link{plot_ic}}, \code{\link{plot_stability}}, \code{\link{extract_consistent_clusters}}
 }
-\export 
+%\export 

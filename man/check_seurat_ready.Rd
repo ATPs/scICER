@@ -77,4 +77,4 @@ if (!status$ready) {
 \seealso{
 \code{\link{scICE_clustering}}
 }
-\export 
+%\export 

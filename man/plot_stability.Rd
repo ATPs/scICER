@@ -93,4 +93,4 @@ ggplot2::ggsave("cluster5_stability.pdf", p2, width = 8, height = 6)
 \seealso{
 \code{\link{scICE_clustering}}, \code{\link{plot_ic}}
 }
-\export 
+%\export 
