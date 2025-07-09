@@ -2,9 +2,7 @@ Package: scICER
 Type: Package
 Title: Single-cell Inconsistency-based Clustering Evaluation
 Version: 1.0.0
-Authors@R: c(
-    person("Xiaolong", "Cao", email = "atps@outlook.com", role = c("aut", "cre"))
-)
+Authors@R: person("Xiaolong", "Cao", email = "atps@outlook.com", role = c("aut", "cre"))
 Description: scICER implements a systematic and efficient workflow to evaluate clustering 
     consistency in single-cell RNA-seq data. It generates multiple cluster labels using 
     the Leiden algorithm, calculates pairwise similarity with Element-Centric Similarity (ECS), 
@@ -13,7 +11,7 @@ Description: scICER implements a systematic and efficient workflow to evaluate c
 License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true
-RoxygenNote: 7.2.3
+RoxygenNote: 7.3.2
 URL: https://github.com/ATPs/scICER
 BugReports: https://github.com/ATPs/scICER/issues
 Depends: 
@@ -39,5 +37,4 @@ Suggests:
     knitr,
     rmarkdown,
     gridExtra
-
 VignetteBuilder: knitr 
