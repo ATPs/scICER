@@ -5,6 +5,23 @@
 #' @importFrom data.table data.table rbindlist
 NULL
 
+#' Cross-platform parallel lapply wrapper
+#' @param X Vector/list to iterate over
+#' @param FUN Function to apply
+#' @param mc.cores Number of cores (ignored on Windows)
+#' @param ... Additional arguments to FUN
+#' @return List of results
+#' @keywords internal
+cross_platform_mclapply <- function(X, FUN, mc.cores = 1, ...) {
+  if (.Platform$OS.type == "windows") {
+    # Use regular lapply on Windows
+    return(lapply(X, FUN, ...))
+  } else {
+    # Use mclapply on Unix-like systems
+    return(parallel::mclapply(X, FUN, mc.cores = mc.cores, ...))
+  }
+}
+
 #' Core clustering algorithm implementing binary search and optimization
 #'
 #' @param igraph_obj igraph object to cluster
@@ -64,7 +81,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   # Windows compatibility for parallel processing
   actual_workers <- if (.Platform$OS.type == "windows" && n_workers > 1) 1 else n_workers
   
-  cluster_filter_results <- parallel::mclapply(cluster_range, function(cluster_num) {
+  cluster_filter_results <- cross_platform_mclapply(cluster_range, function(cluster_num) {
     if (!(as.character(cluster_num) %in% names(gamma_dict))) {
       return(list(excluded = TRUE, cluster_num = cluster_num, reason = "resolution_search_failed"))
     }
@@ -73,7 +90,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
     gamma_test <- seq(gamma_range[1], gamma_range[2], length.out = min(5, diff(gamma_range) * 100 + 1))
     
     # Test multiple gammas in parallel
-            ic_scores <- parallel::mclapply(gamma_test, function(gamma_val) {
+            ic_scores <- cross_platform_mclapply(gamma_test, function(gamma_val) {
       cluster_results <- replicate(10, {
         leiden_clustering(igraph_obj, gamma_val, objective_function, 5, 0.01)
       }, simplify = TRUE)
@@ -164,7 +181,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   # Windows compatibility for clustering optimization
   actual_workers_opt <- if (.Platform$OS.type == "windows" && n_workers > 1) 1 else n_workers
   
-  cluster_results <- parallel::mclapply(valid_clusters, function(cluster_num) {
+  cluster_results <- cross_platform_mclapply(valid_clusters, function(cluster_num) {
     if (!(as.character(cluster_num) %in% names(gamma_dict))) {
       return(NULL)
     }
@@ -203,7 +220,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   # Combine successful results
   successful_results_list <- cluster_results[!sapply(cluster_results, is.null)]
   if (length(successful_results_list) > 0) {
-    successful_results <- data.table::rbindlist(successful_results_list)
+    successful_results <- data.table::rbindlist(successful_results_list, fill = TRUE)
   } else {
     # Create empty data.table with proper structure
     successful_results <- data.table::data.table(
@@ -223,7 +240,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   
   # Combine all results (excluded + successful)
   if (nrow(excluded_entries) > 0 && nrow(successful_results) > 0) {
-    results_dt <- data.table::rbindlist(list(excluded_entries, successful_results))
+    results_dt <- data.table::rbindlist(list(excluded_entries, successful_results), fill = TRUE)
   } else if (nrow(excluded_entries) > 0) {
     results_dt <- excluded_entries
   } else if (nrow(successful_results) > 0) {
@@ -248,19 +265,19 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   # Sort by cluster number
   results_dt <- results_dt[order(results_dt$cluster_number)]
   
-  # Convert back to list format for compatibility
+  # Convert back to list format for compatibility - with defensive programming
   return(list(
-    gamma = results_dt$gamma,
-    labels = results_dt$labels,
-    ic = results_dt$ic,
-    ic_vec = results_dt$ic_vec,
-    n_cluster = results_dt$cluster_number,
-    best_labels = results_dt$best_labels,
-    n_iter = results_dt$n_iter,
-    mei = results_dt$mei,
-    k = results_dt$k,
-    excluded = results_dt$excluded,
-    exclusion_reason = results_dt$exclusion_reason
+    gamma = if ("gamma" %in% colnames(results_dt)) results_dt$gamma else numeric(0),
+    labels = if ("labels" %in% colnames(results_dt)) results_dt$labels else list(),
+    ic = if ("ic" %in% colnames(results_dt)) results_dt$ic else numeric(0),
+    ic_vec = if ("ic_vec" %in% colnames(results_dt)) results_dt$ic_vec else list(),
+    n_cluster = if ("cluster_number" %in% colnames(results_dt)) results_dt$cluster_number else integer(0),
+    best_labels = if ("best_labels" %in% colnames(results_dt)) results_dt$best_labels else list(),
+    n_iter = if ("n_iter" %in% colnames(results_dt)) results_dt$n_iter else integer(0),
+    mei = if ("mei" %in% colnames(results_dt)) results_dt$mei else list(),
+    k = if ("k" %in% colnames(results_dt)) results_dt$k else integer(0),
+    excluded = if ("excluded" %in% colnames(results_dt)) results_dt$excluded else logical(0),
+    exclusion_reason = if ("exclusion_reason" %in% colnames(results_dt)) results_dt$exclusion_reason else character(0)
   ))
 }
 
@@ -285,7 +302,7 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
     n_workers <- 1  # Force single worker on Windows
   }
   
-  range_results <- parallel::mclapply(cluster_range, function(target_clusters) {
+  range_results <- cross_platform_mclapply(cluster_range, function(target_clusters) {
     left <- start_g
     right <- end_g
     max_iterations <- 50  # Limit binary search iterations
@@ -439,7 +456,7 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
   }
   
   # Test initial clustering for each gamma in parallel
-  clustering_results <- parallel::mclapply(gamma_sequence, function(gamma_val) {
+  clustering_results <- cross_platform_mclapply(gamma_sequence, function(gamma_val) {
     cluster_matrix <- replicate(n_trials, {
       leiden_clustering(igraph_obj, gamma_val, objective_function, n_iterations, beta)
     }, simplify = TRUE)
@@ -465,7 +482,7 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
   clustering_matrices <- clustering_matrices[valid_indices]
   
   # Calculate IC for each gamma in parallel
-  ic_scores <- parallel::mclapply(clustering_matrices, function(cluster_matrix) {
+  ic_scores <- cross_platform_mclapply(clustering_matrices, function(cluster_matrix) {
     extracted <- extract_clustering_array(cluster_matrix)
     ic_result <- calculate_ic_from_extracted(extracted)
     return(1 / ic_result)  # Convert to inconsistency score
@@ -496,7 +513,7 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
       k <- k + delta_n
       
       # Update clustering results in parallel
-      new_results <- parallel::mclapply(seq_along(current_gammas), function(i) {
+      new_results <- cross_platform_mclapply(seq_along(current_gammas), function(i) {
         gamma_val <- current_gammas[i]
         current_matrix <- current_results[[i]]
         
@@ -559,7 +576,7 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
   }
   
   # Bootstrap analysis in parallel
-  ic_bootstrap <- parallel::mclapply(seq_len(n_bootstrap), function(i) {
+  ic_bootstrap <- cross_platform_mclapply(seq_len(n_bootstrap), function(i) {
     sample_indices <- sample.int(ncol(best_clustering), ncol(best_clustering), replace = TRUE)
     bootstrap_matrix <- best_clustering[, sample_indices, drop = FALSE]
     extracted <- extract_clustering_array(bootstrap_matrix)
