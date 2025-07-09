@@ -187,7 +187,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   }
   
   # Sort by cluster number
-  results_dt <- results_dt[order(cluster_number)]
+  results_dt <- results_dt[order(results_dt$cluster_number)]
   
   # Convert back to list format for compatibility
   return(list(
