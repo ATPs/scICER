@@ -4,21 +4,82 @@
 \alias{optimize_clustering}
 \title{Optimize clustering within a resolution range}
 \usage{
-optimize_clustering(
-  igraph_obj,
-  target_clusters,
-  gamma_range,
-  objective_function,
-  n_trials,
-  n_bootstrap,
-  beta,
-  n_iterations,
-  max_iterations,
-  resolution_tolerance,
-  n_workers
-)
+optimize_clustering(igraph_obj, target_clusters, gamma_range, objective_function,
+                   n_trials, n_bootstrap, beta, n_iterations, max_iterations,
+                   resolution_tolerance, n_workers)
+}
+\arguments{
+  \item{igraph_obj}{An igraph object to cluster. This should be a valid graph object created using the igraph package.}
+  
+  \item{target_clusters}{Integer specifying the desired number of clusters to achieve.}
+  
+  \item{gamma_range}{Numeric vector of length 2 specifying the [min, max] range for the resolution parameter.}
+  
+  \item{objective_function}{Character string specifying the objective function to use. Must be either "modularity" or "CPM" (Constant Potts Model).}
+  
+  \item{n_trials}{Number of clustering trials per resolution parameter. Higher values increase stability but take longer.}
+  
+  \item{n_bootstrap}{Number of bootstrap iterations for assessing clustering stability. More iterations provide more reliable stability estimates.}
+  
+  \item{beta}{Beta parameter for Leiden clustering (typically between 0 and 1). Controls the resolution of the clustering.}
+  
+  \item{n_iterations}{Number of iterations for each Leiden clustering attempt. Higher values may improve quality but take longer.}
+  
+  \item{max_iterations}{Maximum number of iterations for optimization. The algorithm will stop if this limit is reached.}
+  
+  \item{resolution_tolerance}{Numeric tolerance for the resolution parameter search. Smaller values give more precise results but take longer.}
+  
+  \item{n_workers}{Number of parallel workers for computation. Controls the number of concurrent clustering attempts.}
+}
+\value{
+Returns a list containing:
+\itemize{
+  \item{gamma}{Best resolution parameter found}
+  \item{labels}{Clustering label array from extract_clustering_array}
+  \item{ic_median}{Median inconsistency score from bootstrap analysis}
+  \item{ic_bootstrap}{Vector of bootstrap inconsistency scores}
+  \item{best_labels}{Best clustering labels found}
+  \item{n_iterations}{Number of iterations needed for convergence}
+  \item{k}{Final iteration count}
+}
 }
 \description{
-Optimize clustering within a resolution range
+This function optimizes clustering parameters within a given resolution range to achieve a target number of clusters. It uses parallel processing and iterative refinement to find stable clustering solutions.
+
+The function implements an adaptive optimization strategy that combines multiple trials, bootstrap analysis, and stability assessment to find high-quality clustering solutions.
+}
+\details{
+The optimization process follows these steps:
+\enumerate{
+  \item Generate sequence of gamma values to test
+  \item Perform parallel clustering trials for each gamma
+  \item Filter results to match target cluster number
+  \item Calculate inconsistency scores
+  \item Iteratively improve clustering if needed
+  \item Perform bootstrap analysis for stability assessment
+}
+
+The function uses several advanced features:
+\itemize{
+  \item Parallel processing for clustering trials
+  \item Adaptive sequence generation for gamma values
+  \item Stability tracking through IC history
+  \item Bootstrap analysis for robustness assessment
+}
+
+Performance can be tuned through:
+\itemize{
+  \item n_workers: Controls parallel processing
+  \item n_trials: Balances stability vs. speed
+  \item n_bootstrap: Controls reliability of stability assessment
+  \item resolution_tolerance: Affects precision of parameter search
+}
+
+The function automatically adapts its behavior based on:
+\itemize{
+  \item Objective function type (modularity vs. CPM)
+  \item Initial clustering results
+  \item Stability of intermediate solutions
+}
 }
 \keyword{internal}

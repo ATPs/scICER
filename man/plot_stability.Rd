@@ -1,48 +1,77 @@
 \name{plot_stability}
 \alias{plot_stability}
-\title{Plot stability analysis for scICE clustering results}
-\description{
-Creates visualization of clustering stability across bootstrap samples, 
-showing the distribution of IC scores for each cluster number or detailed 
-analysis for a specific cluster number.
-}
+\title{Plot clustering stability across resolution parameters}
 \usage{
 plot_stability(scice_results, cluster_number = NULL)
 }
 \arguments{
-\item{scice_results}{Results object from scICE_clustering function}
-
-\item{cluster_number}{Specific cluster number to analyze in detail (optional)}
+  \item{scice_results}{Results object from scICE_clustering function. Must be a valid scICE object containing clustering results.}
+  
+  \item{cluster_number}{Optional integer specifying a specific cluster number to analyze. If NULL (default), plots stability across all cluster numbers.}
 }
 \value{
-A ggplot object showing stability analysis. If \code{cluster_number} is specified,
-returns a detailed plot for that specific cluster number. Otherwise, returns
-an overview plot of all tested cluster numbers.
+Returns a ggplot2 object containing either:
+\itemize{
+  \item When cluster_number is NULL:
+    \itemize{
+      \item Line plot showing IC scores vs. cluster numbers
+      \item Points colored by resolution parameter
+      \item Continuous color scale for resolution values
+    }
+  \item When cluster_number is specified:
+    \itemize{
+      \item Histogram of bootstrap IC scores
+      \item Vertical line showing median IC score
+      \item Summary statistics in subtitle
+    }
+}
+
+The plot can be further customized using standard ggplot2 functions.
+}
+\description{
+Creates visualizations to analyze clustering stability either across all cluster numbers or for a specific cluster number. The function provides two different types of plots depending on whether a specific cluster number is specified.
+
+The function uses ggplot2 for high-quality graphics and includes careful attention to visual clarity and statistical summary.
 }
 \details{
-The stability plot helps assess the robustness of clustering results by showing
-the distribution of IC scores across bootstrap samples. This provides insight
-into the statistical significance of the consistency measurements.
+The function provides two distinct visualization modes:
 
-When \code{cluster_number = NULL} (default):
+1. Overview Mode (cluster_number = NULL):
 \itemize{
-  \item Shows boxplots of bootstrap IC distributions for all cluster numbers
-  \item Helpful for comparing stability across different cluster numbers
-  \item Identifies which cluster numbers have the most stable results
+  \item Shows stability across all tested cluster numbers
+  \item Color gradient indicates resolution parameter values
+  \item Connects points to show trends
+  \item Includes both IC scores and resolution information
 }
 
-When a specific \code{cluster_number} is provided:
+2. Detailed Mode (specific cluster_number):
 \itemize{
-  \item Shows detailed distribution for that cluster number
-  \item Includes histogram and density plots
-  \item Shows confidence intervals and summary statistics
+  \item Shows distribution of IC scores from bootstrap analysis
+  \item Includes median line and summary statistics
+  \item Provides detailed view of stability for one cluster number
 }
 
-Interpretation guidelines:
+Visual features:
 \itemize{
-  \item Tight distributions indicate stable clustering
-  \item Wide distributions suggest high variability
-  \item Lower median values indicate better consistency
+  \item Clear color schemes for resolution parameters
+  \item Appropriate binning for histograms
+  \item Minimal theme with informative gridlines
+  \item Properly scaled axes with padding
+}
+
+The function performs input validation for:
+\itemize{
+  \item Valid scICE object
+  \item Presence of required data
+  \item Valid cluster number if specified
+  \item Availability of bootstrap results
+}
+
+Statistical summaries include:
+\itemize{
+  \item Median IC score
+  \item Distribution shape
+  \item Stability metrics
 }
 }
 \examples{
@@ -50,22 +79,18 @@ Interpretation guidelines:
 # Run scICE analysis
 scice_results <- scICE_clustering(pbmc_small, cluster_range = 2:10)
 
-# Overview stability plot
-plot_stability(scice_results)
+# Plot stability across all cluster numbers
+p1 <- plot_stability(scice_results)
 
-# Detailed analysis for 7 clusters
-plot_stability(scice_results, cluster_number = 7)
+# Plot stability for specific cluster number
+p2 <- plot_stability(scice_results, cluster_number = 5)
 
-# Compare stability of different cluster numbers
-stability_overview <- plot_stability(scice_results)
-print(stability_overview)
+# Save plots
+ggplot2::ggsave("overall_stability.pdf", p1, width = 10, height = 6)
+ggplot2::ggsave("cluster5_stability.pdf", p2, width = 8, height = 6)
 }
 }
 \seealso{
-\code{\link{plot_ic}}, \code{\link{scICE_clustering}}, \code{\link{extract_consistent_clusters}}
+\code{\link{scICE_clustering}}, \code{\link{plot_ic}}
 }
-\author{
-Xiaolong Cao
-}
-\keyword{visualization}
-\keyword{stability} 
+\export 

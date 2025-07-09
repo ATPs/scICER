@@ -4,50 +4,71 @@
 \alias{clustering_main}
 \title{Core clustering algorithm implementing binary search and optimization}
 \usage{
-clustering_main(
-  igraph_obj,
-  cluster_range,
-  n_workers,
-  n_trials,
-  n_bootstrap,
-  beta,
-  n_iterations,
-  max_iterations,
-  objective_function,
-  remove_threshold,
-  resolution_tolerance,
-  verbose
-)
+clustering_main(igraph_obj, cluster_range, n_workers = max(1, parallel::detectCores() - 1),
+               n_trials, n_bootstrap, beta, n_iterations, max_iterations,
+               objective_function, remove_threshold, resolution_tolerance, verbose)
 }
 \arguments{
-\item{igraph_obj}{igraph object to cluster}
-
-\item{cluster_range}{Vector of cluster numbers to test}
-
-\item{n_workers}{Number of parallel workers}
-
-\item{n_trials}{Number of clustering trials per resolution}
-
-\item{n_bootstrap}{Number of bootstrap iterations}
-
-\item{beta}{Beta parameter for Leiden clustering}
-
-\item{n_iterations}{Number of Leiden iterations}
-
-\item{max_iterations}{Maximum iterations for optimization}
-
-\item{objective_function}{Objective function ("modularity" or "CPM")}
-
-\item{remove_threshold}{Threshold for removing inconsistent results}
-
-\item{resolution_tolerance}{Tolerance for resolution parameter search}
-
-\item{verbose}{Whether to print progress messages}
+  \item{igraph_obj}{An igraph object to cluster. This should be a valid graph object created using the igraph package.}
+  
+  \item{cluster_range}{A vector of integers specifying the number of clusters to test. For example, c(2:10) will test clustering from 2 to 10 clusters.}
+  
+  \item{n_workers}{Number of parallel workers for computation. Defaults to max(1, parallel::detectCores() - 1). Increase for faster processing on multi-core systems.}
+  
+  \item{n_trials}{Number of clustering trials per resolution parameter. Higher values increase stability but take longer.}
+  
+  \item{n_bootstrap}{Number of bootstrap iterations for assessing clustering stability. More iterations provide more reliable stability estimates.}
+  
+  \item{beta}{Beta parameter for Leiden clustering (typically between 0 and 1). Controls the resolution of the clustering.}
+  
+  \item{n_iterations}{Number of iterations for each Leiden clustering attempt. Higher values may improve quality but take longer.}
+  
+  \item{max_iterations}{Maximum number of iterations for optimization. The algorithm will stop if this limit is reached.}
+  
+  \item{objective_function}{Character string specifying the objective function to use. Must be either "modularity" or "CPM" (Constant Potts Model).}
+  
+  \item{remove_threshold}{Numeric threshold for removing inconsistent clustering results. Higher values are more stringent.}
+  
+  \item{resolution_tolerance}{Numeric tolerance for the resolution parameter search. Smaller values give more precise results but take longer.}
+  
+  \item{verbose}{Logical indicating whether to print progress messages during execution.}
 }
 \value{
-List with clustering results
+Returns a list containing the following components:
+\itemize{
+  \item{gamma}{Numeric vector of resolution parameters used for each cluster number}
+  \item{labels}{List of clustering label arrays for each cluster number}
+  \item{ic}{Numeric vector of inconsistency scores (lower is better)}
+  \item{ic_vec}{List of bootstrap inconsistency scores for each cluster number}
+  \item{n_cluster}{Integer vector of cluster numbers tested}
+  \item{best_labels}{List of best clustering labels for each cluster number}
+  \item{n_iter}{Integer vector of iterations needed for convergence}
+  \item{mei}{List of Mutual Element-wise Information scores}
+  \item{k}{Integer vector of final iteration counts}
+}
 }
 \description{
-Core clustering algorithm implementing binary search and optimization
+This is the core function implementing the scICE clustering algorithm. It performs binary search to find optimal resolution parameters for each desired cluster number, filters out problematic results, and optimizes the clustering using parallel processing for efficiency.
+
+The function uses a combination of binary search and iterative optimization to find stable clustering solutions. It implements parallel processing for improved performance and includes comprehensive stability assessment through bootstrapping.
+}
+\details{
+The algorithm proceeds in several steps:
+\enumerate{
+  \item Binary search to find resolution parameter ranges for each cluster number
+  \item Parallel filtering of problematic cluster numbers
+  \item Optimization of clustering for valid cluster numbers
+  \item Bootstrap analysis for stability assessment
+  \item MEI score calculation for cluster evaluation
+}
+
+The function uses the data.table package for efficient data manipulation and the parallel package for parallel processing. It automatically determines the optimal number of workers based on available CPU cores.
+
+Performance can be tuned through several parameters:
+\itemize{
+  \item Increase n_workers for faster processing on multi-core systems
+  \item Adjust n_trials and n_bootstrap to balance accuracy vs. speed
+  \item Modify resolution_tolerance to control precision of parameter search
+}
 }
 \keyword{internal}

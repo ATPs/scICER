@@ -4,18 +4,65 @@
 \alias{find_resolution_ranges}
 \title{Find resolution parameter ranges for each cluster number using binary search}
 \usage{
-find_resolution_ranges(
-  igraph_obj,
-  cluster_range,
-  start_g,
-  end_g,
-  objective_function,
-  resolution_tolerance,
-  n_workers,
-  verbose
-)
+find_resolution_ranges(igraph_obj, cluster_range, start_g, end_g,
+                      objective_function, resolution_tolerance, n_workers, verbose)
+}
+\arguments{
+  \item{igraph_obj}{An igraph object to cluster. This should be a valid graph object created using the igraph package.}
+  
+  \item{cluster_range}{A vector of integers specifying the number of clusters to test. For example, c(2:10) will test clustering from 2 to 10 clusters.}
+  
+  \item{start_g}{Numeric value specifying the starting point for resolution parameter search. For modularity, typically 0; for CPM, log(resolution_tolerance).}
+  
+  \item{end_g}{Numeric value specifying the ending point for resolution parameter search. For modularity, typically 10; for CPM, 0.}
+  
+  \item{objective_function}{Character string specifying the objective function to use. Must be either "modularity" or "CPM" (Constant Potts Model).}
+  
+  \item{resolution_tolerance}{Numeric tolerance for the resolution parameter search. Smaller values give more precise results but take longer.}
+  
+  \item{n_workers}{Number of parallel workers for computation. Controls the number of concurrent binary searches.}
+  
+  \item{verbose}{Logical indicating whether to print progress messages during execution.}
+}
+\value{
+Returns a named list where:
+\itemize{
+  \item Names are cluster numbers (as character strings)
+  \item Values are numeric vectors of length 2 containing [left_bound, right_bound] for the resolution parameter
+  \item For CPM objective function, bounds are transformed using exp()
+}
 }
 \description{
-Find resolution parameter ranges for each cluster number using binary search
+This function performs parallel binary search to find the resolution parameter ranges that yield specific numbers of clusters. It uses efficient data structures and parallel processing for performance.
+
+The function implements an adaptive binary search strategy that accounts for the different behaviors of modularity and CPM objective functions. It includes preliminary trials to ensure stability of the results.
+}
+\details{
+The algorithm proceeds as follows:
+\enumerate{
+  \item For each cluster number in parallel:
+  \itemize{
+    \item Performs binary search to find lower bound
+    \item Performs binary search to find upper bound
+    \item Uses preliminary trials to ensure stability
+  }
+  \item Results are collected using data.table for efficiency
+  \item Bounds are transformed appropriately for the chosen objective function
+}
+
+The function uses several optimization techniques:
+\itemize{
+  \item Parallel processing for multiple cluster numbers
+  \item Efficient data storage using data.table
+  \item Vectorized operations for cluster counting
+  \item Adaptive search ranges based on objective function
+}
+
+Performance considerations:
+\itemize{
+  \item Increase n_workers for faster processing on multi-core systems
+  \item Adjust resolution_tolerance to balance precision vs. speed
+  \item Number of preliminary trials is fixed at 10 for stability
+}
 }
 \keyword{internal}
