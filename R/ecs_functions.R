@@ -36,54 +36,38 @@ calculate_ecs <- function(cluster_a, cluster_b, d = 0.9, return_vector = FALSE) 
   # Initialize matrices for memoization
   unique_ecs_vals <- matrix(NaN, nrow = length(unique_a), ncol = length(unique_b))
   ecs_scores <- numeric(n)
-  ppr1 <- numeric(n)
-  ppr2 <- numeric(n)
   
+  # Pre-allocate PageRank vectors
+  ppr1 <- matrix(0, nrow = n, ncol = length(unique_a))
+  ppr2 <- matrix(0, nrow = n, ncol = length(unique_b))
+  
+  # Pre-compute PageRank vectors for each cluster
+  for (i in seq_along(unique_a)) {
+    ppr1[groups_a[[i]], i] <- cluster_sizes_a[i]
+    ppr1[groups_a[[i]][1], i] <- 1.0 - d + cluster_sizes_a[i]  # Add base score to first node
+  }
+  
+  for (i in seq_along(unique_b)) {
+    ppr2[groups_b[[i]], i] <- cluster_sizes_b[i]
+    ppr2[groups_b[[i]][1], i] <- 1.0 - d + cluster_sizes_b[i]  # Add base score to first node
+  }
+  
+  # Calculate ECS scores
   for (i in 1:n) {
-    # Get cluster indices (1-based for R)
-    cluster_idx_a <- cluster_a[i] + 1L
-    cluster_idx_b <- cluster_b[i] + 1L
-    
-    # Find position in unique cluster arrays
     pos_a <- which(unique_a == cluster_a[i])
     pos_b <- which(unique_b == cluster_b[i])
     
-    # Check if already calculated
     if (is.nan(unique_ecs_vals[pos_a, pos_b])) {
-      # Get neighboring cells
+      # Get all neighbors
       neighbors_a <- groups_a[[pos_a]]
       neighbors_b <- groups_b[[pos_b]]
       all_neighbors <- unique(c(neighbors_a, neighbors_b))
       
-      # Calculate personalized PageRank vectors
-      for (idx in neighbors_a) {
-        ppr1[idx] <- cluster_sizes_a[pos_a]
-      }
-      ppr1[i] <- 1.0 - d + cluster_sizes_a[pos_a]
-      
-      for (idx in neighbors_b) {
-        ppr2[idx] <- cluster_sizes_b[pos_b]
-      }
-      ppr2[i] <- 1.0 - d + cluster_sizes_b[pos_b]
-      
-      # Calculate L1 distance
-      l1_distance <- 0
-      for (j in all_neighbors) {
-        l1_distance <- l1_distance + abs(ppr2[j] - ppr1[j])
-      }
+      # Calculate L1 distance using pre-computed vectors
+      l1_distance <- sum(abs(ppr2[all_neighbors, pos_b] - ppr1[all_neighbors, pos_a]))
       
       ecs_scores[i] <- l1_distance
-      
-      # Reset PPR vectors
-      for (idx in neighbors_a) {
-        ppr1[idx] <- 0.0
-      }
-      for (idx in neighbors_b) {
-        ppr2[idx] <- 0.0
-      }
-      
-      # Store in memoization matrix
-      unique_ecs_vals[pos_a, pos_b] <- ecs_scores[i]
+      unique_ecs_vals[pos_a, pos_b] <- l1_distance
     } else {
       ecs_scores[i] <- unique_ecs_vals[pos_a, pos_b]
     }
@@ -105,48 +89,26 @@ calculate_ecs <- function(cluster_a, cluster_b, d = 0.9, return_vector = FALSE) 
 #' @return List with unique clustering arrays and their probabilities
 #' @keywords internal
 extract_clustering_array <- function(clustering_matrix) {
-  # Convert each column to a vector and find unique patterns
-  clustering_vectors <- lapply(1:ncol(clustering_matrix), function(i) {
-    clustering_matrix[, i]
-  })
+  # Convert each column to a single string for fast unique identification
+  clustering_strings <- apply(clustering_matrix, 2, paste, collapse = ",")
   
-  # Count occurrences of each unique clustering
-  unique_clusterings <- list()
-  counts <- numeric()
+  # Count frequencies of each unique clustering string
+  clustering_counts <- table(clustering_strings)
   
-  for (i in seq_along(clustering_vectors)) {
-    current_clustering <- clustering_vectors[[i]]
-    
-    # Check if this clustering already exists
-    found <- FALSE
-    for (j in seq_along(unique_clusterings)) {
-      if (identical(current_clustering, unique_clusterings[[j]])) {
-        counts[j] <- counts[j] + 1
-        found <- TRUE
-        break
-      }
-    }
-    
-    if (!found) {
-      unique_clusterings <- append(unique_clusterings, list(current_clustering))
-      counts <- c(counts, 1)
-    }
-  }
+  # Get the unique clusterings as vectors
+  unique_strings <- names(clustering_counts)
+  unique_clusterings <- lapply(strsplit(unique_strings, ","), as.integer)
   
-  # Calculate probabilities
-  probabilities <- counts / sum(counts)
+  # Get probabilities
+  probabilities <- as.vector(clustering_counts) / ncol(clustering_matrix)
   
   # Sort by probability (descending)
   sort_indices <- order(probabilities, decreasing = TRUE)
-  unique_clusterings <- unique_clusterings[sort_indices]
-  probabilities <- probabilities[sort_indices]
   
-  # Normalize probabilities
-  probabilities <- probabilities / sum(probabilities)
-  
+  # Return sorted results
   return(list(
-    arr = unique_clusterings,
-    parr = probabilities
+    arr = unique_clusterings[sort_indices],
+    parr = probabilities[sort_indices]
   ))
 }
 
@@ -209,24 +171,26 @@ calculate_ic_from_extracted <- function(clustering_array) {
     return(1.0)  # Perfect consistency
   }
   
-  # Calculate pairwise similarity matrix
+  # Calculate pairwise similarity matrix using vectorized operations
   similarity_matrix <- matrix(1, nrow = n_clusterings, ncol = n_clusterings)
   
+  # Convert list of clusterings to a matrix for faster operations
+  clustering_matrix <- do.call(cbind, unique_clusterings)
+  
+  # Calculate similarities for upper triangle only
   for (i in 1:(n_clusterings - 1)) {
-    for (j in (i + 1):n_clusterings) {
-      similarity <- calculate_ecs(unique_clusterings[[i]], unique_clusterings[[j]])
-      similarity_matrix[i, j] <- similarity
-      similarity_matrix[j, i] <- similarity
-    }
+    # Calculate similarities for all j > i at once
+    similarities <- sapply((i + 1):n_clusterings, function(j) {
+      calculate_ecs(clustering_matrix[, i], clustering_matrix[, j])
+    })
+    
+    # Fill both upper and lower triangle
+    similarity_matrix[i, (i + 1):n_clusterings] <- similarities
+    similarity_matrix[(i + 1):n_clusterings, i] <- similarities
   }
   
-  # Calculate weighted IC score
-  ic_score <- 0
-  for (i in 1:n_clusterings) {
-    for (j in 1:n_clusterings) {
-      ic_score <- ic_score + probabilities[i] * probabilities[j] * similarity_matrix[i, j]
-    }
-  }
+  # Calculate weighted IC score using matrix operations
+  ic_score <- sum(outer(probabilities, probabilities) * similarity_matrix)
   
   return(ic_score)
 }

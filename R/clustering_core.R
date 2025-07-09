@@ -1,13 +1,15 @@
 #' @import igraph
 #' @importFrom stats median
 #' @importFrom utils txtProgressBar setTxtProgressBar
+#' @importFrom parallel detectCores mclapply
+#' @importFrom data.table data.table rbindlist
 NULL
 
 #' Core clustering algorithm implementing binary search and optimization
 #'
 #' @param igraph_obj igraph object to cluster
 #' @param cluster_range Vector of cluster numbers to test
-#' @param n_workers Number of parallel workers
+#' @param n_workers Number of parallel workers (default: max(1, parallel::detectCores() - 1))
 #' @param n_trials Number of clustering trials per resolution
 #' @param n_bootstrap Number of bootstrap iterations
 #' @param beta Beta parameter for Leiden clustering
@@ -19,19 +21,22 @@ NULL
 #' @param verbose Whether to print progress messages
 #' @return List with clustering results
 #' @keywords internal
-clustering_main <- function(igraph_obj, cluster_range, n_workers, n_trials, n_bootstrap,
-                           beta, n_iterations, max_iterations, objective_function,
-                           remove_threshold, resolution_tolerance, verbose) {
+clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parallel::detectCores() - 1), 
+                          n_trials, n_bootstrap, beta, n_iterations, max_iterations, 
+                          objective_function, remove_threshold, resolution_tolerance, verbose) {
   
-  # Initialize results storage
-  list_gamma <- list()
-  list_labels <- list()
-  list_incons <- numeric()
-  list_all_ic <- list()
-  list_best_labels <- list()
-  list_n_iter <- numeric()
-  list_mn <- numeric()
-  list_k <- numeric()
+  # Initialize results storage using data.table for better performance
+  results_dt <- data.table::data.table(
+    cluster_number = integer(),
+    gamma = numeric(),
+    labels = list(),
+    ic = numeric(),
+    ic_vec = list(),
+    best_labels = list(),
+    n_iter = integer(),
+    mei = list(),
+    k = integer()
+  )
   
   # Determine resolution search bounds
   if (objective_function == "modularity") {
@@ -51,11 +56,36 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers, n_trials, n_bo
     resolution_tolerance, n_workers, verbose
   )
   
-  # Filter out problematic cluster numbers
-  excluded_numbers <- filter_problematic_clusters(
-    gamma_dict, cluster_range, igraph_obj, objective_function,
-    remove_threshold, n_workers, verbose
-  )
+  # Filter out problematic cluster numbers in parallel
+  if (verbose) message("Filtering problematic clusters...")
+  
+  cluster_filter_results <- parallel::mclapply(cluster_range, function(cluster_num) {
+    if (!(as.character(cluster_num) %in% names(gamma_dict))) {
+      return(list(excluded = TRUE, cluster_num = cluster_num))
+    }
+    
+    gamma_range <- gamma_dict[[as.character(cluster_num)]]
+    gamma_test <- seq(gamma_range[1], gamma_range[2], length.out = min(5, diff(gamma_range) * 100 + 1))
+    
+    # Test multiple gammas in parallel
+    ic_scores <- parallel::mclapply(gamma_test, function(gamma_val) {
+      cluster_results <- replicate(10, {
+        leiden_clustering(igraph_obj, gamma_val, objective_function, 5, 0.01)
+      }, simplify = TRUE)
+      
+      extracted_results <- extract_clustering_array(cluster_results)
+      ic_result <- calculate_ic_from_extracted(extracted_results)
+      return(1 / ic_result)
+    }, mc.cores = n_workers)
+    
+    ic_scores <- unlist(ic_scores)
+    excluded <- min(ic_scores, na.rm = TRUE) >= remove_threshold
+    
+    return(list(excluded = excluded, cluster_num = cluster_num))
+  }, mc.cores = n_workers)
+  
+  excluded_numbers <- sapply(cluster_filter_results, function(x) if(x$excluded) x$cluster_num else NULL)
+  excluded_numbers <- unlist(excluded_numbers)
   
   if (verbose && length(excluded_numbers) > 0) {
     message(paste("Excluded cluster numbers:", paste(excluded_numbers, collapse = ", ")))
@@ -68,24 +98,12 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers, n_trials, n_bo
     return(NULL)
   }
   
-  # Optimize clustering for each valid cluster number
+  # Optimize clustering for each valid cluster number in parallel
   if (verbose) message("Optimizing clustering for each valid cluster number...")
   
-  pb <- NULL
-  if (verbose) {
-    pb <- txtProgressBar(min = 0, max = length(valid_clusters), style = 3)
-  }
-  
-  for (i in seq_along(valid_clusters)) {
-    cluster_num <- valid_clusters[i]
-    
-    if (verbose) {
-      setTxtProgressBar(pb, i)
-    }
-    
-    # Get resolution range for this cluster number
-    if (!(cluster_num %in% names(gamma_dict))) {
-      next
+  cluster_results <- parallel::mclapply(valid_clusters, function(cluster_num) {
+    if (!(as.character(cluster_num) %in% names(gamma_dict))) {
+      return(NULL)
     }
     
     gamma_range <- gamma_dict[[as.character(cluster_num)]]
@@ -98,36 +116,39 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers, n_trials, n_bo
     )
     
     if (!is.null(result)) {
-      list_gamma <- append(list_gamma, list(result$gamma))
-      list_labels <- append(list_labels, list(result$labels))
-      list_incons <- c(list_incons, result$ic_median)
-      list_all_ic <- append(list_all_ic, list(result$ic_bootstrap))
-      list_best_labels <- append(list_best_labels, list(result$best_labels))
-      list_n_iter <- c(list_n_iter, result$n_iterations)
-      list_mn <- c(list_mn, cluster_num)
-      list_k <- c(list_k, result$k)
+      # Calculate MEI scores
+      mei_scores <- calculate_mei_from_array(result$labels)
+      
+      # Return as a data.table row
+      return(data.table::data.table(
+        cluster_number = cluster_num,
+        gamma = result$gamma,
+        labels = list(result$labels),
+        ic = result$ic_median,
+        ic_vec = list(result$ic_bootstrap),
+        best_labels = list(result$best_labels),
+        n_iter = result$n_iterations,
+        mei = list(mei_scores),
+        k = result$k
+      ))
     }
-  }
+    return(NULL)
+  }, mc.cores = n_workers)
   
-  if (verbose) {
-    close(pb)
-  }
+  # Combine results
+  results_dt <- data.table::rbindlist(cluster_results[!sapply(cluster_results, is.null)])
   
-  # Calculate MEI scores
-  if (verbose) message("Calculating MEI scores...")
-  mei_scores <- lapply(list_labels, calculate_mei_from_array)
-  
-  # Return results
+  # Convert back to list format for compatibility
   return(list(
-    gamma = list_gamma,
-    labels = list_labels,
-    ic = list_incons,
-    ic_vec = list_all_ic,
-    n_cluster = list_mn,
-    best_labels = list_best_labels,
-    n_iter = list_n_iter,
-    mei = mei_scores,
-    k = list_k
+    gamma = results_dt$gamma,
+    labels = results_dt$labels,
+    ic = results_dt$ic,
+    ic_vec = results_dt$ic_vec,
+    n_cluster = results_dt$cluster_number,
+    best_labels = results_dt$best_labels,
+    n_iter = results_dt$n_iter,
+    mei = results_dt$mei,
+    k = results_dt$k
   ))
 }
 
@@ -136,12 +157,19 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers, n_trials, n_bo
 find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
                                   objective_function, resolution_tolerance, n_workers, verbose) {
   
-  gamma_dict <- list()
+  # Initialize results storage with data.table
+  results_dt <- data.table::data.table(
+    cluster_number = integer(),
+    left_bound = numeric(),
+    right_bound = numeric()
+  )
+  
   n_preliminary_trials <- 10
   beta_preliminary <- 0.01
   n_iter_preliminary <- 3
   
-  for (target_clusters in cluster_range) {
+  # Process cluster numbers in parallel
+  range_results <- parallel::mclapply(cluster_range, function(target_clusters) {
     left <- start_g
     right <- end_g
     
@@ -150,12 +178,13 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
       mid <- (left + right) / 2
       gamma_val <- if (objective_function == "modularity") mid else exp(mid)
       
-      # Test clustering with current gamma
+      # Test clustering with current gamma using vectorized operations
       cluster_results <- replicate(n_preliminary_trials, {
         leiden_clustering(igraph_obj, gamma_val, objective_function, n_iter_preliminary, beta_preliminary)
       }, simplify = TRUE)
       
-      n_clusters_obtained <- median(apply(cluster_results, 2, max) + 1)
+      # Use apply for efficient calculation
+      n_clusters_obtained <- stats::median(apply(cluster_results, 2, max) + 1)
       
       if (n_clusters_obtained < target_clusters) {
         left <- mid
@@ -174,12 +203,13 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
       mid <- (left + right) / 2
       gamma_val <- if (objective_function == "modularity") mid else exp(mid)
       
-      # Test clustering with current gamma
+      # Test clustering with current gamma using vectorized operations
       cluster_results <- replicate(n_preliminary_trials, {
         leiden_clustering(igraph_obj, gamma_val, objective_function, n_iter_preliminary, beta_preliminary)
       }, simplify = TRUE)
       
-      n_clusters_obtained <- median(apply(cluster_results, 2, max) + 1)
+      # Use apply for efficient calculation
+      n_clusters_obtained <- stats::median(apply(cluster_results, 2, max) + 1)
       
       if (n_clusters_obtained > target_clusters) {
         right <- mid
@@ -190,13 +220,20 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
     
     right_bound <- left
     
-    # Store the range
-    if (objective_function == "CPM") {
-      gamma_dict[[as.character(target_clusters)]] <- c(exp(left_bound), exp(right_bound))
-    } else {
-      gamma_dict[[as.character(target_clusters)]] <- c(left_bound, right_bound)
-    }
-  }
+    # Return results as a data.table row
+    data.table::data.table(
+      cluster_number = target_clusters,
+      left_bound = if (objective_function == "CPM") exp(left_bound) else left_bound,
+      right_bound = if (objective_function == "CPM") exp(right_bound) else right_bound
+    )
+  }, mc.cores = n_workers)
+  
+  # Combine results
+  results_dt <- data.table::rbindlist(range_results)
+  
+  # Convert to named list format
+  gamma_dict <- as.list(data.table::setkey(results_dt, cluster_number)[, .(bounds = list(c(left_bound, right_bound))), by = cluster_number]$bounds)
+  names(gamma_dict) <- as.character(results_dt$cluster_number)
   
   return(gamma_dict)
 }
@@ -246,37 +283,38 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
   n_steps <- 11
   delta_n <- 2
   
-  # Create gamma sequence
-  if (objective_function == "modularity") {
-    delta_g <- (gamma_range[2] - gamma_range[1]) / n_steps
-    if (gamma_range[1] != gamma_range[2]) {
-      gamma_sequence <- seq(gamma_range[1], gamma_range[2], by = delta_g)
+  # Create gamma sequence using efficient sequence generation
+  gamma_sequence <- if (objective_function == "modularity") {
+    if (!identical(gamma_range[1], gamma_range[2])) {
+      seq(gamma_range[1], gamma_range[2], length.out = n_steps)
     } else {
-      gamma_sequence <- seq(gamma_range[1] - delta_g, gamma_range[1] + delta_g, by = delta_g / n_steps * 2)
+      delta_g <- resolution_tolerance
+      seq(gamma_range[1] - delta_g, gamma_range[1] + delta_g, length.out = n_steps)
     }
   } else { # CPM
-    if (gamma_range[1] != gamma_range[2]) {
-      delta_g <- (log(gamma_range[2]) - log(gamma_range[1])) / n_steps
-      gamma_sequence <- exp(seq(log(gamma_range[1]), log(gamma_range[2]), by = delta_g))
+    if (!identical(gamma_range[1], gamma_range[2])) {
+      exp(seq(log(gamma_range[1]), log(gamma_range[2]), length.out = n_steps))
     } else {
-      delta_g <- 0.1
-      gamma_sequence <- exp(seq(log(gamma_range[1]) - delta_g, log(gamma_range[1]) + delta_g, by = delta_g / n_steps * 2))
+      delta_g <- resolution_tolerance
+      exp(seq(log(gamma_range[1]) - delta_g, log(gamma_range[1]) + delta_g, length.out = n_steps))
     }
   }
   
-  # Test initial clustering for each gamma
-  clustering_results <- list()
-  mean_clusters <- numeric(length(gamma_sequence))
-  
-  for (i in seq_along(gamma_sequence)) {
-    gamma_val <- gamma_sequence[i]
+  # Test initial clustering for each gamma in parallel
+  clustering_results <- parallel::mclapply(gamma_sequence, function(gamma_val) {
     cluster_matrix <- replicate(n_trials, {
       leiden_clustering(igraph_obj, gamma_val, objective_function, n_iterations, beta)
     }, simplify = TRUE)
     
-    clustering_results[[i]] <- cluster_matrix
-    mean_clusters[i] <- median(apply(cluster_matrix, 2, max) + 1)
-  }
+    list(
+      matrix = cluster_matrix,
+      mean_clusters = stats::median(apply(cluster_matrix, 2, max) + 1)
+    )
+  }, mc.cores = n_workers)
+  
+  # Extract results
+  mean_clusters <- sapply(clustering_results, function(x) x$mean_clusters)
+  clustering_matrices <- lapply(clustering_results, function(x) x$matrix)
   
   # Filter for target cluster number
   valid_indices <- which(mean_clusters == target_clusters)
@@ -286,110 +324,113 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
   }
   
   gamma_sequence <- gamma_sequence[valid_indices]
-  clustering_results <- clustering_results[valid_indices]
-  mean_clusters <- mean_clusters[valid_indices]
+  clustering_matrices <- clustering_matrices[valid_indices]
   
-  # Calculate IC for each gamma
-  ic_scores <- sapply(clustering_results, function(cluster_matrix) {
+  # Calculate IC for each gamma in parallel
+  ic_scores <- parallel::mclapply(clustering_matrices, function(cluster_matrix) {
     extracted <- extract_clustering_array(cluster_matrix)
     ic_result <- calculate_ic_from_extracted(extracted)
     return(1 / ic_result)  # Convert to inconsistency score
-  })
+  }, mc.cores = n_workers)
   
-  # Find the best gamma (one with IC = 1 if exists, otherwise lowest IC)
+  ic_scores <- unlist(ic_scores)
+  
+  # Find the best gamma
   best_index <- which(ic_scores == 1)[1]
   if (is.na(best_index)) {
     best_index <- which.min(ic_scores)
   }
   
   best_gamma <- gamma_sequence[best_index]
-  best_clustering <- clustering_results[[best_index]]
+  best_clustering <- clustering_matrices[[best_index]]
   k <- n_iterations
   
   # If no perfect IC found, iterate to improve
   if (ic_scores[best_index] != 1 && length(gamma_sequence) > 1) {
-    # Iterative improvement
-    current_results <- clustering_results
+    current_results <- clustering_matrices
     current_gammas <- gamma_sequence
     current_ic <- ic_scores
     
-    # Track stability
-    ic_history <- matrix(rep(current_ic, 10), nrow = length(current_ic), ncol = 10)
+    # Track stability using a matrix for efficiency
+    ic_history <- matrix(rep(current_ic, 10), nrow = length(current_ic))
     
     while (k < max_iterations) {
       k <- k + delta_n
       
-      # Update clustering results
-      for (i in seq_along(current_gammas)) {
+      # Update clustering results in parallel
+      new_results <- parallel::mclapply(seq_along(current_gammas), function(i) {
         gamma_val <- current_gammas[i]
+        current_matrix <- current_results[[i]]
         
         # Use previous results as initialization
         new_clustering <- replicate(n_trials, {
-          init_membership <- current_results[[i]][, sample(ncol(current_results[[i]]), 1)]
+          init_membership <- current_matrix[, sample.int(ncol(current_matrix), 1)]
           leiden_clustering(igraph_obj, gamma_val, objective_function, delta_n, beta, init_membership)
         }, simplify = TRUE)
         
-        current_results[[i]] <- new_clustering
-      }
-      
-      # Recalculate IC scores
-      new_ic <- sapply(current_results, function(cluster_matrix) {
-        extracted <- extract_clustering_array(cluster_matrix)
+        # Calculate IC score
+        extracted <- extract_clustering_array(new_clustering)
         ic_result <- calculate_ic_from_extracted(extracted)
-        return(1 / ic_result)
-      })
+        
+        list(
+          matrix = new_clustering,
+          ic = 1 / ic_result
+        )
+      }, mc.cores = n_workers)
+      
+      # Extract results
+      new_matrices <- lapply(new_results, function(x) x$matrix)
+      new_ic <- sapply(new_results, function(x) x$ic)
       
       # Update IC history
-      ic_history[, 1:(ncol(ic_history)-1)] <- ic_history[, 2:ncol(ic_history)]
-      ic_history[, ncol(ic_history)] <- new_ic
+      ic_history <- cbind(ic_history[, -1], new_ic)
       
       # Check for stability and convergence
-      stable_indices <- apply(ic_history, 1, function(row) all(diff(row) == 0))
+      stable_indices <- apply(ic_history, 1, function(row) length(unique(row)) == 1)
       perfect_indices <- which(new_ic == 1)
       
       # Selection criteria
       if (length(perfect_indices) > 0) {
         best_index <- perfect_indices[1]
+        best_gamma <- current_gammas[best_index]
+        best_clustering <- new_matrices[[best_index]]
         break
       } else if (all(stable_indices)) {
         best_index <- which.min(new_ic)
-        break
-      } else if (k > 100 && median(new_ic) > 1.1) {
-        best_index <- which.min(new_ic)
+        best_gamma <- current_gammas[best_index]
+        best_clustering <- new_matrices[[best_index]]
         break
       } else {
         # Continue with best performing gammas
-        keep_indices <- (new_ic <= quantile(new_ic, 0.5)) | stable_indices
+        keep_indices <- (new_ic <= stats::quantile(new_ic, 0.5)) | stable_indices
         keep_indices[which.min(new_ic)] <- TRUE
         
-        if (length(which(keep_indices)) == 1) {
+        if (sum(keep_indices) == 1) {
           best_index <- which(keep_indices)
+          best_gamma <- current_gammas[best_index]
+          best_clustering <- new_matrices[[best_index]]
           break
         }
         
         current_gammas <- current_gammas[keep_indices]
-        current_results <- current_results[keep_indices]
+        current_results <- new_matrices[keep_indices]
         ic_history <- ic_history[keep_indices, , drop = FALSE]
-        new_ic <- new_ic[keep_indices]
+        current_ic <- new_ic[keep_indices]
       }
-      
-      current_ic <- new_ic
     }
-    
-    best_gamma <- current_gammas[best_index]
-    best_clustering <- current_results[[best_index]]
   }
   
-  # Bootstrap analysis
-  ic_bootstrap <- replicate(n_bootstrap, {
-    sample_indices <- sample(ncol(best_clustering), ncol(best_clustering), replace = TRUE)
-    bootstrap_matrix <- best_clustering[, sample_indices]
+  # Bootstrap analysis in parallel
+  ic_bootstrap <- parallel::mclapply(seq_len(n_bootstrap), function(i) {
+    sample_indices <- sample.int(ncol(best_clustering), ncol(best_clustering), replace = TRUE)
+    bootstrap_matrix <- best_clustering[, sample_indices, drop = FALSE]
     extracted <- extract_clustering_array(bootstrap_matrix)
     ic_result <- calculate_ic_from_extracted(extracted)
     return(1 / ic_result)
-  })
+  }, mc.cores = n_workers)
   
-  ic_median <- median(ic_bootstrap)
+  ic_bootstrap <- unlist(ic_bootstrap)
+  ic_median <- stats::median(ic_bootstrap)
   
   # Extract best labels
   extracted_best <- extract_clustering_array(best_clustering)
