@@ -74,9 +74,9 @@ scICE_clustering <- function(object,
                             beta = 0.1,
                             n_iterations = 10,
                             max_iterations = 150,
-                            ic_threshold = 1.005,
+                            ic_threshold = Inf,
                             objective_function = "CPM",
-                            remove_threshold = 1.15,
+                            remove_threshold = Inf,
                             resolution_tolerance = 1e-8,
                             verbose = TRUE) {
   

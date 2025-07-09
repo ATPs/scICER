@@ -5,7 +5,7 @@
 scICE_clustering(object, cluster_range = 2:10, n_workers = max(1, parallel::detectCores() - 1),
                 n_trials = 100, n_bootstrap = 100, beta = 0.01, n_iterations = 10,
                 max_iterations = 10, objective_function = "CPM",
-                remove_threshold = 1.1, resolution_tolerance = 0.001,
+                remove_threshold = Inf, resolution_tolerance = 0.001,
                 graph_name = NULL, verbose = TRUE)
 }
 \arguments{
@@ -35,7 +35,7 @@ scICE_clustering(object, cluster_range = 2:10, n_workers = max(1, parallel::dete
             (known as the resolution limit).
     }}
   
-  \item{remove_threshold}{Threshold for removing inconsistent results (default: 1.1).}
+  \item{remove_threshold}{Threshold for removing inconsistent results (default: Inf). Set to Inf to include all cluster numbers for plotting and analysis.}
   
   \item{resolution_tolerance}{Tolerance for resolution parameter search (default: 0.001).}
   

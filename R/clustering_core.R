@@ -43,11 +43,11 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   # Determine resolution search bounds
   if (objective_function == "modularity") {
     start_g <- 0
-    end_g <- 10
+    end_g <- 20  # Increased for higher cluster numbers
   } else { # CPM
     start_g <- log(resolution_tolerance)
     if (start_g < -13) start_g <- -13
-    end_g <- 0
+    end_g <- 2  # Increased for higher cluster numbers
   }
   
   # Binary search for resolution ranges
@@ -61,6 +61,9 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   # Filter out problematic cluster numbers in parallel
   if (verbose) message("Filtering problematic clusters...")
   
+  # Windows compatibility for parallel processing
+  actual_workers <- if (.Platform$OS.type == "windows" && n_workers > 1) 1 else n_workers
+  
   cluster_filter_results <- parallel::mclapply(cluster_range, function(cluster_num) {
     if (!(as.character(cluster_num) %in% names(gamma_dict))) {
       return(list(excluded = TRUE, cluster_num = cluster_num, reason = "resolution_search_failed"))
@@ -70,7 +73,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
     gamma_test <- seq(gamma_range[1], gamma_range[2], length.out = min(5, diff(gamma_range) * 100 + 1))
     
     # Test multiple gammas in parallel
-    ic_scores <- parallel::mclapply(gamma_test, function(gamma_val) {
+            ic_scores <- parallel::mclapply(gamma_test, function(gamma_val) {
       cluster_results <- replicate(10, {
         leiden_clustering(igraph_obj, gamma_val, objective_function, 5, 0.01)
       }, simplify = TRUE)
@@ -78,14 +81,14 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
       extracted_results <- extract_clustering_array(cluster_results)
       ic_result <- calculate_ic_from_extracted(extracted_results)
       return(1 / ic_result)
-    }, mc.cores = n_workers)
-    
-    ic_scores <- unlist(ic_scores)
-    excluded <- min(ic_scores, na.rm = TRUE) >= remove_threshold
+          }, mc.cores = actual_workers)
+      
+      ic_scores <- unlist(ic_scores)
+      excluded <- min(ic_scores, na.rm = TRUE) >= remove_threshold
     reason <- if (excluded) "high_inconsistency" else "passed_filtering"
     
     return(list(excluded = excluded, cluster_num = cluster_num, reason = reason))
-  }, mc.cores = n_workers)
+  }, mc.cores = actual_workers)
   
   excluded_numbers <- sapply(cluster_filter_results, function(x) if(x$excluded) x$cluster_num else NULL)
   excluded_numbers <- unlist(excluded_numbers)
@@ -221,13 +224,20 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
   beta_preliminary <- 0.01
   n_iter_preliminary <- 3
   
-  # Process cluster numbers in parallel
+  # Process cluster numbers in parallel (with Windows compatibility)
+  if (.Platform$OS.type == "windows" && n_workers > 1) {
+    n_workers <- 1  # Force single worker on Windows
+  }
+  
   range_results <- parallel::mclapply(cluster_range, function(target_clusters) {
     left <- start_g
     right <- end_g
+    max_iterations <- 50  # Limit binary search iterations
+    iteration_count <- 0
     
-    # Binary search for lower bound
-    while (abs(if (objective_function == "modularity") left - right else exp(left) - exp(right)) > resolution_tolerance) {
+    # Binary search for lower bound with fallback
+    while (abs(if (objective_function == "modularity") left - right else exp(left) - exp(right)) > resolution_tolerance && iteration_count < max_iterations) {
+      iteration_count <- iteration_count + 1
       mid <- (left + right) / 2
       gamma_val <- if (objective_function == "modularity") mid else exp(mid)
       
@@ -248,11 +258,13 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
     
     left_bound <- right
     
-    # Binary search for upper bound
+    # Binary search for upper bound with fallback
     left <- left_bound
     right <- end_g
+    iteration_count <- 0
     
-    while (abs(if (objective_function == "modularity") left - right else exp(left) - exp(right)) > resolution_tolerance) {
+    while (abs(if (objective_function == "modularity") left - right else exp(left) - exp(right)) > resolution_tolerance && iteration_count < max_iterations) {
+      iteration_count <- iteration_count + 1
       mid <- (left + right) / 2
       gamma_val <- if (objective_function == "modularity") mid else exp(mid)
       
@@ -272,6 +284,21 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
     }
     
     right_bound <- left
+    
+    # If bounds are identical or invalid, create a small range around the found value
+    if (identical(left_bound, right_bound) || is.na(left_bound) || is.na(right_bound)) {
+      if (objective_function == "CPM") {
+        # For CPM, create a range around the found value
+        center_val <- ifelse(is.na(left_bound), exp((start_g + end_g) / 2), left_bound)
+        left_bound <- max(exp(start_g), center_val * 0.8)
+        right_bound <- min(exp(end_g), center_val * 1.2)
+      } else {
+        # For modularity, create a range around the found value
+        center_val <- ifelse(is.na(left_bound), (start_g + end_g) / 2, left_bound)
+        left_bound <- max(start_g, center_val - 0.1)
+        right_bound <- min(end_g, center_val + 0.1)
+      }
+    }
     
     # Return results as a data.table row
     data.table::data.table(
