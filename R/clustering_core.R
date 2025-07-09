@@ -238,16 +238,71 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
     )
   }
   
-  # Combine all results (excluded + successful)
-  if (nrow(excluded_entries) > 0 && nrow(successful_results) > 0) {
-    results_dt <- data.table::rbindlist(list(excluded_entries, successful_results), fill = TRUE)
-  } else if (nrow(excluded_entries) > 0) {
-    results_dt <- excluded_entries
-  } else if (nrow(successful_results) > 0) {
-    results_dt <- successful_results
-  } else {
-    # Both are empty - should not happen, but handle gracefully
-    results_dt <- data.table::data.table(
+  # Combine all results (excluded + successful) with robust error handling
+  tryCatch({
+    if (nrow(excluded_entries) > 0 && nrow(successful_results) > 0) {
+      # Ensure both data.tables have compatible column structures
+      if (all(colnames(excluded_entries) %in% colnames(successful_results)) &&
+          all(colnames(successful_results) %in% colnames(excluded_entries))) {
+        results_dt <- data.table::rbindlist(list(excluded_entries, successful_results), fill = TRUE)
+      } else {
+        # If columns don't match, combine manually
+        all_cols <- union(colnames(excluded_entries), colnames(successful_results))
+        for (col in all_cols) {
+          if (!col %in% colnames(excluded_entries)) {
+            excluded_entries[[col]] <- switch(col,
+              "cluster_number" = integer(nrow(excluded_entries)),
+              "gamma" = numeric(nrow(excluded_entries)),
+              "labels" = rep(list(NULL), nrow(excluded_entries)),
+              "ic" = numeric(nrow(excluded_entries)),
+              "ic_vec" = rep(list(NULL), nrow(excluded_entries)),
+              "best_labels" = rep(list(NULL), nrow(excluded_entries)),
+              "n_iter" = integer(nrow(excluded_entries)),
+              "mei" = rep(list(NULL), nrow(excluded_entries)),
+              "k" = integer(nrow(excluded_entries)),
+              "excluded" = logical(nrow(excluded_entries)),
+              "exclusion_reason" = character(nrow(excluded_entries)))
+          }
+          if (!col %in% colnames(successful_results)) {
+            successful_results[[col]] <- switch(col,
+              "cluster_number" = integer(nrow(successful_results)),
+              "gamma" = numeric(nrow(successful_results)),
+              "labels" = rep(list(NULL), nrow(successful_results)),
+              "ic" = numeric(nrow(successful_results)),
+              "ic_vec" = rep(list(NULL), nrow(successful_results)),
+              "best_labels" = rep(list(NULL), nrow(successful_results)),
+              "n_iter" = integer(nrow(successful_results)),
+              "mei" = rep(list(NULL), nrow(successful_results)),
+              "k" = integer(nrow(successful_results)),
+              "excluded" = logical(nrow(successful_results)),
+              "exclusion_reason" = character(nrow(successful_results)))
+          }
+        }
+        results_dt <- data.table::rbindlist(list(excluded_entries, successful_results), fill = TRUE)
+      }
+    } else if (nrow(excluded_entries) > 0) {
+      results_dt <- excluded_entries
+    } else if (nrow(successful_results) > 0) {
+      results_dt <- successful_results
+    } else {
+      # Both are empty - create empty data.table with proper structure
+      results_dt <- data.table::data.table(
+        cluster_number = integer(),
+        gamma = numeric(),
+        labels = list(),
+        ic = numeric(),
+        ic_vec = list(),
+        best_labels = list(),
+        n_iter = integer(),
+        mei = list(),
+        k = integer(),
+        excluded = logical(),
+        exclusion_reason = character()
+      )
+    }
+  }, error = function(e) {
+    warning("Error combining results, creating empty results: ", e$message)
+    results_dt <<- data.table::data.table(
       cluster_number = integer(),
       gamma = numeric(),
       labels = list(),
@@ -260,10 +315,12 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
       excluded = logical(),
       exclusion_reason = character()
     )
-  }
+  })
   
-  # Sort by cluster number
-  results_dt <- results_dt[order(results_dt$cluster_number)]
+  # Sort by cluster number (only if the column exists and there are rows)
+  if (nrow(results_dt) > 0 && "cluster_number" %in% colnames(results_dt)) {
+    results_dt <- results_dt[order(results_dt$cluster_number)]
+  }
   
   # Convert back to list format for compatibility - with defensive programming
   return(list(
@@ -382,7 +439,21 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
   }, mc.cores = n_workers)
   
   # Combine results
-  results_dt <- data.table::rbindlist(range_results)
+  # Filter out NULL results from parallel processing
+  valid_results <- range_results[!sapply(range_results, is.null)]
+  
+  if (length(valid_results) == 0) {
+    # If no valid results, return empty gamma_dict
+    warning("No valid resolution ranges found for any cluster numbers")
+    return(setNames(list(), character(0)))
+  }
+  
+  results_dt <- data.table::rbindlist(valid_results)
+  
+  # Check if required columns exist
+  if (!"left_bound" %in% colnames(results_dt) || !"right_bound" %in% colnames(results_dt)) {
+    stop("Missing required columns in resolution range results")
+  }
   
   # Convert to named list format - fixing the data.table syntax
   gamma_dict <- lapply(seq_len(nrow(results_dt)), function(i) {
