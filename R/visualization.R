@@ -1,3 +1,8 @@
+#' @import ggplot2
+#' @importFrom stats quantile median
+#' @importFrom methods inherits
+NULL
+
 #' Plot Inconsistency (IC) scores across different cluster numbers
 #'
 #' @description

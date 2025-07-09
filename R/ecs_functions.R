@@ -1,3 +1,7 @@
+#' @importFrom stats mean
+#' @importFrom base diag
+NULL
+
 #' Calculate Element-Centric Similarity (ECS) between two clustering results
 #'
 #' @description

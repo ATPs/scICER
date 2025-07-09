@@ -1,3 +1,8 @@
+#' @import igraph
+#' @importFrom stats median
+#' @importFrom utils txtProgressBar setTxtProgressBar
+NULL
+
 #' Core clustering algorithm implementing binary search and optimization
 #'
 #' @param igraph_obj igraph object to cluster

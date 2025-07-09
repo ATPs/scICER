@@ -1,3 +1,9 @@
+#' @import Seurat
+#' @import SeuratObject
+#' @importFrom methods inherits
+#' @importFrom parallel detectCores
+NULL
+
 #' Check if Seurat object is ready for scICER analysis
 #'
 #' @description

@@ -108,9 +108,9 @@ scICE_clustering <- function(object,
   # Set up parallel processing
   if (n_workers > 1) {
     if (!getDoParRegistered()) {
-      cl <- makeCluster(min(n_workers, detectCores() - 1))
-      registerDoParallel(cl)
-      on.exit(stopCluster(cl))
+      cl <- parallel::makeCluster(min(n_workers, detectCores() - 1))
+      doParallel::registerDoParallel(cl)
+      on.exit(parallel::stopCluster(cl))
     }
   }
   

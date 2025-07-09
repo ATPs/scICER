@@ -1,3 +1,9 @@
+#' @import igraph
+#' @importFrom Matrix which
+#' @importFrom methods inherits
+#' @importFrom utils head
+NULL
+
 #' Perform Leiden clustering on an igraph object
 #'
 #' @param igraph_obj igraph object to cluster
