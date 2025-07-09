@@ -15,12 +15,12 @@ leiden_clustering <- function(igraph_obj, resolution, objective_function,
   is_weighted <- is.weighted(igraph_obj)
   
   # Set up parameters for leiden clustering
-  weights <- if (is_weighted) E(igraph_obj)$weight else NULL
+  weights <- if (is_weighted) igraph::E(igraph_obj)$weight else NULL
   
   # Use igraph's leiden clustering
   if (objective_function == "modularity") {
     # For modularity, use the standard leiden algorithm
-    result <- cluster_leiden(
+    result <- igraph::cluster_leiden(
       igraph_obj,
       resolution_parameter = resolution,
       weights = weights,
@@ -29,7 +29,7 @@ leiden_clustering <- function(igraph_obj, resolution, objective_function,
     )
   } else { # CPM
     # For CPM, use the CPM quality function
-    result <- cluster_leiden(
+    result <- igraph::cluster_leiden(
       igraph_obj,
       objective_function = "CPM",
       resolution_parameter = resolution,
@@ -40,7 +40,7 @@ leiden_clustering <- function(igraph_obj, resolution, objective_function,
   }
   
   # Return 0-based cluster assignments for consistency with Julia code
-  return(as.integer(membership(result)) - 1L)
+  return(as.integer(igraph::membership(result)) - 1L)
 }
 
 #' Convert Seurat graph to igraph object
@@ -61,12 +61,12 @@ graph_to_igraph <- function(seurat_graph) {
     
     # Create igraph object
     n_vertices <- nrow(seurat_graph)
-    igraph_obj <- make_empty_graph(n = n_vertices, directed = FALSE)
+    igraph_obj <- igraph::make_empty_graph(n = n_vertices, directed = FALSE)
     
     # Add edges with weights
     if (length(edges) > 0) {
-      igraph_obj <- add_edges(igraph_obj, edges)
-      E(igraph_obj)$weight <- weights
+      igraph_obj <- igraph::add_edges(igraph_obj, edges)
+      igraph::E(igraph_obj)$weight <- weights
     }
     
     return(igraph_obj)
@@ -81,7 +81,7 @@ graph_to_igraph <- function(seurat_graph) {
 #' @return Logical indicating if graph is weighted
 #' @keywords internal
 is.weighted.igraph <- function(igraph_obj) {
-  return("weight" %in% edge_attr_names(igraph_obj))
+  return("weight" %in% igraph::edge_attr_names(igraph_obj))
 }
 
 #' Alternative leiden clustering using leiden package if available
@@ -117,7 +117,7 @@ leiden_clustering_alternative <- function(adjacency_matrix, resolution, objectiv
     return(as.integer(result) - 1L)  # Convert to 0-based
   } else {
     # Fallback to igraph implementation
-    igraph_obj <- graph_from_adjacency_matrix(adjacency_matrix, 
+    igraph_obj <- igraph::graph_from_adjacency_matrix(adjacency_matrix, 
                                              mode = "undirected", 
                                              weighted = TRUE)
     return(leiden_clustering(igraph_obj, resolution, objective_function, 
