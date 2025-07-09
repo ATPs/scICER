@@ -81,7 +81,8 @@ cl <- makeCluster(min(n_workers, parallel::detectCores() - 1))
 registerDoParallel(cl)
 
 # Load your Seurat object
-# data(pbmc_small)  # Example dataset
+data(pbmc_small)  # Example dataset
+seurat_obj <- pbmc_small
 
 # Ensure preprocessing is complete
 seurat_obj <- NormalizeData(seurat_obj)

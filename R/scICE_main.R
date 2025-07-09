@@ -10,6 +10,7 @@
 #' @importFrom foreach getDoParRegistered
 #' @importFrom parallel makeCluster stopCluster detectCores
 #' @importFrom doParallel registerDoParallel
+#' @importFrom igraph make_empty_graph add_edges E V vcount ecount cluster_leiden membership graph_from_adjacency_matrix edge_attr_names
 #'
 #' Single-cell Inconsistency-based Clustering Evaluation (scICE)
 #'
