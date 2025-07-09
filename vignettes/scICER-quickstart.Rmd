@@ -1,0 +1,374 @@
+---
+title: "Quick Start Guide: scICER for Clustering Consistency Evaluation"
+author: "scICER Development Team"
+date: "`r Sys.Date()`"
+output: 
+  rmarkdown::html_vignette:
+    toc: true
+    toc_depth: 3
+vignette: >
+  %\VignetteIndexEntry{Quick Start Guide: scICER for Clustering Consistency Evaluation}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  warning = FALSE,
+  message = FALSE
+)
+```
+
+# Introduction
+
+**scICER** (Single-cell Inconsistency-based Clustering Evaluation in R) is a powerful tool for evaluating clustering consistency in single-cell RNA-seq data. This vignette provides a comprehensive guide to using scICER with Seurat objects.
+
+## What scICER Does
+
+scICER addresses a fundamental challenge in single-cell analysis: **How many clusters should I choose?** 
+
+It accomplishes this by:
+
+1. **Testing Multiple Cluster Numbers**: Systematically evaluates a range of cluster numbers
+2. **Measuring Consistency**: Uses Element-Centric Similarity (ECS) to assess how stable clustering results are
+3. **Finding Optimal Solutions**: Identifies cluster numbers that produce consistent, reproducible results
+4. **Integrating with Seurat**: Seamlessly works with Seurat objects and workflows
+
+## Key Concepts
+
+- **Inconsistency Coefficient (IC)**: Lower values indicate more consistent clustering (IC = 1.0 is perfect)
+- **Element-Centric Similarity (ECS)**: Efficient method for comparing clustering results
+- **Bootstrap Validation**: Assesses stability through resampling
+- **Leiden Clustering**: High-quality community detection algorithm used internally
+
+# Installation and Setup
+
+## Install scICER
+
+```{r install, eval=FALSE}
+# Install from GitHub
+if (!requireNamespace("devtools", quietly = TRUE))
+    install.packages("devtools")
+
+devtools::install_github("ATPs/scICER")
+```
+
+## Load Required Libraries
+
+```{r load_libraries, message=FALSE}
+library(scICER)
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+
+# Set random seed for reproducibility
+set.seed(123)
+```
+
+# Basic Workflow
+
+## 1. Prepare Your Seurat Object
+
+For this tutorial, we'll use the built-in `pbmc_small` dataset from Seurat:
+
+```{r load_data}
+# Load example data
+data("pbmc_small")
+seurat_obj <- pbmc_small
+
+# Display basic information
+cat("Dataset Information:\n")
+cat("Number of cells:", ncol(seurat_obj), "\n")
+cat("Number of genes:", nrow(seurat_obj), "\n")
+```
+
+## 2. Standard Preprocessing
+
+Ensure your Seurat object has completed standard preprocessing:
+
+```{r preprocessing}
+# Check if preprocessing is done, if not, perform it
+if (!"pca" %in% names(seurat_obj@reductions)) {
+  seurat_obj <- NormalizeData(seurat_obj, verbose = FALSE)
+  seurat_obj <- FindVariableFeatures(seurat_obj, verbose = FALSE)
+  seurat_obj <- ScaleData(seurat_obj, verbose = FALSE)
+  seurat_obj <- RunPCA(seurat_obj, verbose = FALSE)
+}
+
+# Essential: Compute neighbor graph (required for scICER)
+if (!"snn" %in% names(seurat_obj@graphs)) {
+  seurat_obj <- FindNeighbors(seurat_obj, dims = 1:10, verbose = FALSE)
+}
+
+cat("Preprocessing complete. Available graphs:", names(seurat_obj@graphs), "\n")
+```
+
+## 3. Run scICER Analysis
+
+Now we can run the main scICER analysis:
+
+```{r run_scice}
+# Run scICER clustering evaluation
+scice_results <- scICE_clustering(
+  object = seurat_obj,
+  cluster_range = 2:8,           # Test 2-8 clusters (reduced for quick demo)
+  n_workers = 2,                 # Use 2 cores
+  n_trials = 8,                  # Reduced for faster computation
+  n_bootstrap = 20,              # Reduced for faster computation
+  verbose = TRUE
+)
+
+# Display results summary
+cat("\nResults Summary:\n")
+cat("Tested cluster numbers:", paste(scice_results$n_cluster, collapse = ", "), "\n")
+cat("Inconsistency scores:", paste(round(scice_results$ic, 4), collapse = ", "), "\n")
+cat("Consistent clusters (IC < 1.005):", paste(scice_results$consistent_clusters, collapse = ", "), "\n")
+```
+
+# Interpreting Results
+
+## 1. Visualize Inconsistency Coefficients
+
+The IC plot shows you which cluster numbers are most consistent:
+
+```{r plot_ic, fig.width=8, fig.height=5}
+# Plot IC scores
+ic_plot <- plot_ic(scice_results, 
+                   threshold = 1.005,
+                   title = "Clustering Consistency Analysis")
+print(ic_plot)
+```
+
+**Interpretation:**
+- **Green points** (IC < 1.005): Highly consistent, recommended cluster numbers
+- **Red points** (IC ≥ 1.005): Less consistent, use with caution
+- **Lower IC values**: More consistent clustering
+
+## 2. Stability Analysis
+
+Examine the stability of different cluster numbers:
+
+```{r plot_stability, fig.width=8, fig.height=5}
+# Plot stability analysis
+stability_plot <- plot_stability(scice_results)
+print(stability_plot)
+```
+
+## 3. Extract Consistent Clustering Results
+
+Get detailed information about consistent clusters:
+
+```{r extract_results}
+# Get summary of consistent clusters
+if (length(scice_results$consistent_clusters) > 0) {
+  summary_table <- extract_consistent_clusters(scice_results, threshold = 1.005)
+  print(summary_table)
+  
+  # Extract clustering labels for consistent results
+  cluster_labels <- get_robust_labels(scice_results, threshold = 1.005)
+  
+  if (!is.null(cluster_labels)) {
+    cat("\nExtracted clustering labels:\n")
+    cat("Available clusterings:", paste(names(cluster_labels), collapse = ", "), "\n")
+    
+    # Show first few rows of the most consistent clustering
+    first_clustering <- names(cluster_labels)[2]  # Skip cell names column
+    cat("\nFirst 10 assignments for", first_clustering, ":\n")
+    print(head(cluster_labels[, c("cell_names", first_clustering)], 10))
+  }
+} else {
+  cat("No clusters meet the strict consistency threshold (IC < 1.005).\n")
+  cat("Consider using a more lenient threshold like 1.01.\n")
+  
+  # Try with more lenient threshold
+  lenient_summary <- extract_consistent_clusters(scice_results, threshold = 1.01)
+  if (nrow(lenient_summary) > 0) {
+    cat("\nWith more lenient threshold (IC < 1.01):\n")
+    print(lenient_summary)
+  }
+}
+```
+
+# Advanced Usage
+
+## 1. Add Results to Seurat Object
+
+Integrate scICER results directly into your Seurat workflow:
+
+```{r add_to_seurat}
+# Add consistent clustering results to Seurat object
+seurat_obj <- get_robust_labels(scice_results, return_seurat = TRUE, threshold = 1.01)
+
+# Check what was added
+new_columns <- grep("clusters_", names(seurat_obj@meta.data), value = TRUE)
+cat("Added to Seurat metadata:", paste(new_columns, collapse = ", "), "\n")
+
+# Display the metadata
+if (length(new_columns) > 0) {
+  cat("\nFirst few rows of clustering results:\n")
+  print(head(seurat_obj@meta.data[, new_columns, drop = FALSE]))
+}
+```
+
+## 2. Visualization with Consistent Clusters
+
+Create UMAP visualization with consistent clustering:
+
+```{r visualization, fig.width=10, fig.height=4}
+# Run UMAP if not already done
+if (!"umap" %in% names(seurat_obj@reductions)) {
+  seurat_obj <- RunUMAP(seurat_obj, dims = 1:10, verbose = FALSE)
+}
+
+# Create visualizations with consistent clusters
+if (length(new_columns) > 0) {
+  # Plot with the first consistent clustering
+  first_clustering <- new_columns[1]
+  
+  p1 <- DimPlot(seurat_obj, group.by = first_clustering, label = TRUE) +
+    ggtitle(paste("UMAP with", gsub("clusters_", "", first_clustering), "clusters")) +
+    theme(legend.position = "right")
+  
+  print(p1)
+  
+  # If multiple clusterings, show comparison
+  if (length(new_columns) > 1) {
+    second_clustering <- new_columns[2]
+    p2 <- DimPlot(seurat_obj, group.by = second_clustering, label = TRUE) +
+      ggtitle(paste("UMAP with", gsub("clusters_", "", second_clustering), "clusters")) +
+      theme(legend.position = "right")
+    
+    print(p2)
+  }
+}
+```
+
+## 3. Continue with Standard Seurat Analysis
+
+Use consistent clustering for downstream analysis:
+
+```{r downstream_analysis}
+if (length(new_columns) > 0) {
+  # Set the most consistent clustering as the active identity
+  best_clustering <- new_columns[1]
+  Idents(seurat_obj) <- best_clustering
+  
+  cat("Active identity set to:", best_clustering, "\n")
+  cat("Cluster distribution:\n")
+  print(table(Idents(seurat_obj)))
+  
+  # Find markers for the consistent clusters
+  # Note: This is commented out as it can be slow for larger datasets
+  # markers <- FindAllMarkers(seurat_obj, only.pos = TRUE, min.pct = 0.25)
+  # cat("Found", nrow(markers), "cluster markers\n")
+}
+```
+
+# Customization and Parameters
+
+## Parameter Tuning for Different Datasets
+
+### For Small Datasets (<5,000 cells)
+```{r small_dataset, eval=FALSE}
+scice_results_small <- scICE_clustering(
+  object = seurat_obj,
+  cluster_range = 2:10,
+  n_workers = 4,
+  n_trials = 15,
+  n_bootstrap = 100,
+  objective_function = "modularity"  # Often works better for small datasets
+)
+```
+
+### For Large Datasets (>50,000 cells)
+```{r large_dataset, eval=FALSE}
+scice_results_large <- scICE_clustering(
+  object = large_seurat_obj,
+  cluster_range = 5:20,
+  n_workers = 8,
+  n_trials = 8,                    # Reduced for speed
+  n_bootstrap = 50,                # Reduced for speed
+  objective_function = "CPM"       # Generally better for large datasets
+)
+```
+
+### High-Resolution Analysis
+```{r high_res, eval=FALSE}
+scice_results_highres <- scICE_clustering(
+  object = seurat_obj,
+  cluster_range = 10:30,
+  n_workers = 6,
+  ic_threshold = 1.01,             # More lenient threshold
+  max_iterations = 200,            # More optimization
+  n_bootstrap = 150               # More robust estimation
+)
+```
+
+# Best Practices and Tips
+
+## 1. Choosing Parameters
+
+- **cluster_range**: Start with 2 to 2-3× your expected number of cell types
+- **n_workers**: Use `detectCores() - 1` for maximum speed
+- **ic_threshold**: 1.005 (strict), 1.01 (moderate), 1.02 (lenient)
+- **objective_function**: "CPM" for most cases, "modularity" for small datasets
+
+## 2. Interpreting Results
+
+- **IC < 1.005**: Excellent consistency, high confidence
+- **IC 1.005-1.01**: Good consistency, reasonable confidence  
+- **IC 1.01-1.02**: Moderate consistency, use with caution
+- **IC > 1.02**: Poor consistency, likely overfitting
+
+## 3. Troubleshooting
+
+```{r troubleshooting, eval=FALSE}
+# Common issues and solutions:
+
+# 1. No consistent clusters found
+# Try more lenient threshold
+results_lenient <- scICE_clustering(seurat_obj, ic_threshold = 1.02)
+
+# 2. Memory issues
+# Reduce parameters
+results_fast <- scICE_clustering(
+  seurat_obj, 
+  n_trials = 5, 
+  n_bootstrap = 25, 
+  n_workers = 2
+)
+
+# 3. Very slow performance
+# Install leiden package for speed
+if (!requireNamespace("leiden", quietly = TRUE)) {
+  install.packages("leiden")
+}
+
+# 4. Check data quality
+# Ensure proper preprocessing
+VlnPlot(seurat_obj, features = c("nFeature_RNA", "nCount_RNA"))
+```
+
+# Summary
+
+scICER provides a principled approach to determining optimal cluster numbers in single-cell data:
+
+1. **Start with standard Seurat preprocessing**
+2. **Run `scICE_clustering()` with appropriate parameters**
+3. **Visualize results with `plot_ic()` and `plot_stability()`**
+4. **Extract consistent clusters with `get_robust_labels()`**
+5. **Continue with standard Seurat analysis using consistent clustering**
+
+The key insight is that **consistent clustering across multiple runs indicates robust, biologically meaningful cell type distinctions**, while inconsistent clustering suggests potential overfitting or noise.
+
+For more advanced usage and examples, see the additional vignettes:
+- `vignette("scICER-advanced")`: Advanced parameter tuning and large dataset handling
+- `vignette("scICER-integration")`: Integration with other single-cell tools
+
+# Session Info
+
+```{r session_info}
+sessionInfo()
+``` 

@@ -1,0 +1,43 @@
+Package: scICER
+Type: Package
+Title: Single-cell Inconsistency-based Clustering Evaluation
+Version: 1.0.0
+Authors@R: c(
+    person("Xiaolong", "Cao", email = "atps@outlook.com", role = c("aut", "cre"))
+)
+Description: scICER implements a systematic and efficient workflow to evaluate clustering 
+    consistency in single-cell RNA-seq data. It generates multiple cluster labels using 
+    the Leiden algorithm, calculates pairwise similarity with Element-Centric Similarity (ECS), 
+    and provides automated framework for finding consistent clusters. This R package is fully 
+    compatible with Seurat objects and designed for seamless integration into Seurat workflows.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+RoxygenNote: 7.2.3
+URL: https://github.com/ATPs/scICER
+BugReports: https://github.com/ATPs/scICER/issues
+Depends: 
+    R (>= 4.0.0)
+Imports:
+    Seurat (>= 4.0.0),
+    SeuratObject,
+    igraph,
+    Matrix,
+    parallel,
+    foreach,
+    doParallel,
+    dplyr,
+    ggplot2,
+    stats,
+    methods,
+    utils,
+    grDevices,
+    graphics
+Suggests:
+    leiden,
+    testthat (>= 3.0.0),
+    knitr,
+    rmarkdown,
+    gridExtra
+
+VignetteBuilder: knitr 
