@@ -1,10 +1,10 @@
 \name{scICE_clustering}
 \alias{scICE_clustering}
-\title{Run scICE clustering analysis on a Seurat object}
+\title{Run scICER clustering analysis on a Seurat object}
 \usage{
 scICE_clustering(object, cluster_range = 2:10, n_workers = max(1, parallel::detectCores() - 1),
                 n_trials = 100, n_bootstrap = 100, beta = 0.01, n_iterations = 10,
-                max_iterations = 10, objective_function = "modularity",
+                max_iterations = 10, objective_function = "CPM",
                 remove_threshold = 1.1, resolution_tolerance = 0.001,
                 graph_name = NULL, verbose = TRUE)
 }
@@ -25,7 +25,15 @@ scICE_clustering(object, cluster_range = 2:10, n_workers = max(1, parallel::dete
   
   \item{max_iterations}{Maximum iterations for optimization (default: 10).}
   
-  \item{objective_function}{Objective function to use, either "modularity" or "CPM" (default: "modularity").}
+  \item{objective_function}{Objective function to use, either "modularity" or "CPM" (default: "CPM"). 
+    \itemize{
+      \item CPM (Constant Potts Model): Recommended for most cases, especially larger datasets. CPM is more flexible 
+            and can overcome the resolution limit by using a resolution parameter (gamma) that controls cluster sizes. 
+            Higher resolution finds smaller clusters, lower resolution finds larger clusters.
+      \item modularity: Traditional approach that measures connection density within clusters compared to random networks. 
+            Better suited for smaller datasets but may struggle with identifying small, well-defined clusters 
+            (known as the resolution limit).
+    }}
   
   \item{remove_threshold}{Threshold for removing inconsistent results (default: 1.1).}
   
@@ -33,7 +41,15 @@ scICE_clustering(object, cluster_range = 2:10, n_workers = max(1, parallel::dete
   
   \item{graph_name}{Name of the graph to use for clustering. If NULL (default), will use the default SNN graph from the active assay (e.g., "RNA_snn" for RNA assay).}
   
-  \item{verbose}{Whether to print progress messages (default: TRUE).}
+  \item{verbose}{Whether to print progress messages (default: TRUE). When TRUE, provides detailed information about:
+    \itemize{
+      \item Graph validation status and properties
+      \item Progress for each cluster number being tested
+      \item Number of stable solutions found
+      \item Optimization iteration progress
+      \item Summary of consistent cluster numbers identified
+      \item Quality metrics for each clustering solution
+    }}
 }
 \value{
 Returns a list with class "scICE" containing:
@@ -54,18 +70,19 @@ Returns a list with class "scICE" containing:
 }
 }
 \description{
-Performs scICE (single-cell Iterative Clustering Ensemble) analysis on a Seurat object to identify stable clustering solutions. The function implements parallel processing and comprehensive stability assessment through bootstrap analysis.
+Performs scICER (single-cell Inconsistency-based Clustering Evaluation in R) analysis on a Seurat object to identify stable clustering solutions. The function implements parallel processing and comprehensive stability assessment through bootstrap analysis.
 
 The algorithm uses the Leiden community detection method with adaptive resolution parameter search to find optimal clustering solutions for each desired number of clusters.
 }
 \details{
-The scICE algorithm proceeds through several steps:
+The scICER algorithm proceeds through several steps:
 
 1. Graph Preparation:
 \itemize{
   \item Uses the SNN graph from the specified assay
   \item Automatically detects the appropriate graph if not specified
   \item Validates graph structure and connectivity
+  \item Reports graph properties (nodes, edges, density)
 }
 
 2. Parameter Search:
@@ -73,6 +90,7 @@ The scICE algorithm proceeds through several steps:
   \item Binary search for resolution parameters
   \item Parallel processing for efficiency
   \item Adaptive ranges based on objective function
+  \item Reports progress for each cluster number
 }
 
 3. Stability Assessment:
@@ -80,6 +98,7 @@ The scICE algorithm proceeds through several steps:
   \item Bootstrap analysis for each cluster number
   \item Inconsistency score calculation
   \item Filtering of unstable solutions
+  \item Reports number of stable solutions found
 }
 
 4. Result Optimization:
@@ -87,6 +106,7 @@ The scICE algorithm proceeds through several steps:
   \item Iterative refinement of clustering
   \item MEI score calculation
   \item Selection of best solutions
+  \item Reports quality metrics for final solutions
 }
 
 Performance can be tuned through several parameters:
@@ -98,10 +118,17 @@ Performance can be tuned through several parameters:
 
 The function provides comprehensive progress updates when verbose = TRUE:
 \itemize{
-  \item Graph validation status
+  \item Initial graph validation and properties
   \item Search progress for each cluster number
-  \item Optimization iterations
-  \item Final results summary
+  \item Number of stable solutions identified
+  \item Optimization iteration progress
+  \item Final results summary including:
+    \itemize{
+      \item Total number of consistent clusters found
+      \item Range of cluster numbers that passed stability criteria
+      \item Inconsistency scores for each solution
+      \item MEI scores for final clusterings
+    }
 }
 }
 \examples{
@@ -109,24 +136,24 @@ The function provides comprehensive progress updates when verbose = TRUE:
 # Load example data
 data(pbmc_small)
 
-# Basic usage
+# Basic usage with CPM (recommended for most cases)
 results <- scICE_clustering(pbmc_small, cluster_range = 2:10)
 
-# With custom parameters
+# Using modularity (suitable for smaller datasets)
 results <- scICE_clustering(
   pbmc_small,
   cluster_range = 2:15,
   n_trials = 200,
   n_bootstrap = 150,
-  objective_function = "CPM",
+  objective_function = "modularity",
   graph_name = "RNA_snn",
   verbose = TRUE
 )
 
 # Access results
-print(results$consistent_clusters)
-plot_ic(results)
-plot_stability(results)
+print(results$consistent_clusters)  # Shows which cluster numbers were stable
+plot_ic(results)  # Visualize inconsistency scores
+plot_stability(results)  # Visualize stability metrics
 }
 }
 \seealso{

@@ -52,7 +52,7 @@ plot_ic <- function(scice_results, threshold = 1.005, figure_size = c(10, 6),
                  outlier.alpha = 0.6,
                  fill = "lightblue",
                  alpha = 0.7) +
-    ggplot2::geom_jitter(width = 0.2, alpha = 0.4, size = 0.8) +
+    ggplot2::geom_jitter(width = 0.2, alpha = 0.4, size = 0.8, height = 0) +
     ggplot2::scale_x_discrete(name = "Number of Clusters") +
     ggplot2::scale_y_continuous(name = "Inconsistency (IC) Score",
                       limits = c(0.99, max(plot_data$ic_score) * 1.05)) +
