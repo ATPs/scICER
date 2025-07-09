@@ -118,7 +118,27 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
     }
     return(NULL)
   })
-  excluded_entries <- data.table::rbindlist(excluded_entries[!sapply(excluded_entries, is.null)])
+  
+  # Handle excluded entries properly
+  excluded_entries_list <- excluded_entries[!sapply(excluded_entries, is.null)]
+  if (length(excluded_entries_list) > 0) {
+    excluded_entries <- data.table::rbindlist(excluded_entries_list)
+  } else {
+    # Create empty data.table with proper structure
+    excluded_entries <- data.table::data.table(
+      cluster_number = integer(),
+      gamma = numeric(),
+      labels = list(),
+      ic = numeric(),
+      ic_vec = list(),
+      best_labels = list(),
+      n_iter = integer(),
+      mei = list(),
+      k = integer(),
+      excluded = logical(),
+      exclusion_reason = character()
+    )
+  }
   
   if (length(valid_clusters) == 0) {
     if (verbose) message("No valid cluster numbers found")
@@ -140,6 +160,9 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   
   # Optimize clustering for each valid cluster number in parallel
   if (verbose) message("Optimizing clustering for each valid cluster number...")
+  
+  # Windows compatibility for clustering optimization
+  actual_workers_opt <- if (.Platform$OS.type == "windows" && n_workers > 1) 1 else n_workers
   
   cluster_results <- parallel::mclapply(valid_clusters, function(cluster_num) {
     if (!(as.character(cluster_num) %in% names(gamma_dict))) {
@@ -175,18 +198,51 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
       ))
     }
     return(NULL)
-  }, mc.cores = n_workers)
+  }, mc.cores = actual_workers_opt)
   
   # Combine successful results
-  successful_results <- data.table::rbindlist(cluster_results[!sapply(cluster_results, is.null)])
+  successful_results_list <- cluster_results[!sapply(cluster_results, is.null)]
+  if (length(successful_results_list) > 0) {
+    successful_results <- data.table::rbindlist(successful_results_list)
+  } else {
+    # Create empty data.table with proper structure
+    successful_results <- data.table::data.table(
+      cluster_number = integer(),
+      gamma = numeric(),
+      labels = list(),
+      ic = numeric(),
+      ic_vec = list(),
+      best_labels = list(),
+      n_iter = integer(),
+      mei = list(),
+      k = integer(),
+      excluded = logical(),
+      exclusion_reason = character()
+    )
+  }
   
   # Combine all results (excluded + successful)
   if (nrow(excluded_entries) > 0 && nrow(successful_results) > 0) {
     results_dt <- data.table::rbindlist(list(excluded_entries, successful_results))
   } else if (nrow(excluded_entries) > 0) {
     results_dt <- excluded_entries
-  } else {
+  } else if (nrow(successful_results) > 0) {
     results_dt <- successful_results
+  } else {
+    # Both are empty - should not happen, but handle gracefully
+    results_dt <- data.table::data.table(
+      cluster_number = integer(),
+      gamma = numeric(),
+      labels = list(),
+      ic = numeric(),
+      ic_vec = list(),
+      best_labels = list(),
+      n_iter = integer(),
+      mei = list(),
+      k = integer(),
+      excluded = logical(),
+      exclusion_reason = character()
+    )
   }
   
   # Sort by cluster number
