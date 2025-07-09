@@ -56,15 +56,17 @@ graph_to_igraph <- function(seurat_graph) {
     indices <- Matrix::which(seurat_graph > 0, arr.ind = TRUE)
     weights <- as.vector(seurat_graph[indices])
     
-    # Create edge list (convert to 0-based for igraph)
-    edges <- as.vector(t(indices - 1))
+    # Create edge list (0-based for igraph)
+    # Each row in indices is (from, to), so we need to subtract 1 from each index
+    edges <- c(t(indices - 1))  # Flatten the matrix row by row
     
     # Create igraph object
     n_vertices <- nrow(seurat_graph)
     igraph_obj <- igraph::make_empty_graph(n = n_vertices, directed = FALSE)
     
-    # Add edges with weights
+    # Add edges with weights if there are any edges
     if (length(edges) > 0) {
+      # Add edges in pairs
       igraph_obj <- igraph::add_edges(igraph_obj, edges)
       igraph::E(igraph_obj)$weight <- weights
     }

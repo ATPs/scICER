@@ -64,6 +64,7 @@
 #' }
 #'
 #' @export
+
 scICE_clustering <- function(object, 
                             graph_name = NULL,
                             cluster_range = 1:20,
