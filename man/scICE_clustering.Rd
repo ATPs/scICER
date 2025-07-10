@@ -3,7 +3,7 @@
 \title{Run scICER clustering analysis on a Seurat object}
 \usage{
 scICE_clustering(object, cluster_range = 2:10, n_workers = max(1, parallel::detectCores() - 1),
-                n_trials = 100, n_bootstrap = 100, seed = NULL, beta = 0.01, n_iterations = 10,
+                n_trials = 15, n_bootstrap = 100, seed = NULL, beta = 0.01, n_iterations = 10,
                 max_iterations = 10, objective_function = "CPM",
                 remove_threshold = Inf, resolution_tolerance = 0.001,
                 graph_name = NULL, verbose = TRUE)
