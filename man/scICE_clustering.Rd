@@ -3,7 +3,7 @@
 \title{Run scICER clustering analysis on a Seurat object}
 \usage{
 scICE_clustering(object, cluster_range = 2:10, n_workers = max(1, parallel::detectCores() - 1),
-                n_trials = 100, n_bootstrap = 100, beta = 0.01, n_iterations = 10,
+                n_trials = 100, n_bootstrap = 100, seed = NULL, beta = 0.01, n_iterations = 10,
                 max_iterations = 10, objective_function = "CPM",
                 remove_threshold = Inf, resolution_tolerance = 0.001,
                 graph_name = NULL, verbose = TRUE)
@@ -18,6 +18,8 @@ scICE_clustering(object, cluster_range = 2:10, n_workers = max(1, parallel::dete
   \item{n_trials}{Number of clustering trials per resolution (default: 100).}
   
   \item{n_bootstrap}{Number of bootstrap iterations (default: 100).}
+  
+  \item{seed}{Random seed for reproducibility (default: NULL). When set, ensures identical results across multiple runs with the same parameters.}
   
   \item{beta}{Beta parameter for Leiden clustering (default: 0.01).}
   
@@ -116,11 +118,20 @@ The scICER algorithm proceeds through several steps:
   \item Reports quality metrics for final solutions
 }
 
+5. Reproducibility Control:
+\itemize{
+  \item Optional seed parameter for deterministic results
+  \item Hierarchical seeding strategy for parallel processing
+  \item Consistent results across multiple runs with same seed
+  \item Different seeds produce different valid solutions
+}
+
 Performance can be tuned through several parameters:
 \itemize{
   \item n_workers: Controls parallel processing
   \item n_trials and n_bootstrap: Balance accuracy vs. speed
   \item resolution_tolerance: Affects parameter search precision
+  \item seed: Controls reproducibility of results
 }
 
 The function provides comprehensive progress updates when verbose = TRUE:
@@ -146,16 +157,35 @@ data(pbmc_small)
 # Basic usage with CPM (recommended for most cases)
 results <- scICE_clustering(pbmc_small, cluster_range = 2:10)
 
-# Using modularity (suitable for smaller datasets)
+# Using modularity with seed for reproducibility
 results <- scICE_clustering(
   pbmc_small,
   cluster_range = 2:15,
   n_trials = 200,
   n_bootstrap = 150,
+  seed = 12345,  # Set seed for reproducible results
   objective_function = "modularity",
   graph_name = "RNA_snn",
   verbose = TRUE
 )
+
+# Reproduce exact results by using same seed and parameters
+results_reproduced <- scICE_clustering(
+  pbmc_small,
+  cluster_range = 2:15,
+  n_trials = 200,
+  n_bootstrap = 150,
+  seed = 12345,  # Same seed = same results
+  objective_function = "modularity",
+  graph_name = "RNA_snn",
+  verbose = TRUE
+)
+
+# Try different seeds to explore alternative solutions
+seeds_to_try <- c(123, 456, 789)
+results_list <- lapply(seeds_to_try, function(s) {
+  scICE_clustering(pbmc_small, cluster_range = 2:10, seed = s)
+})
 
 # Access results
 print(results$consistent_clusters)  # Shows which cluster numbers were stable

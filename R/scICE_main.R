@@ -26,6 +26,7 @@
 #' @param n_workers Number of parallel workers to use (default: 10)
 #' @param n_trials Number of clustering trials per resolution (default: 15)
 #' @param n_bootstrap Number of bootstrap iterations (default: 100)
+#' @param seed Random seed for reproducibility (default: NULL for random behavior)
 #' @param beta Beta parameter for Leiden clustering (default: 0.1)
 #' @param n_iterations Number of Leiden iterations (default: 10)
 #' @param max_iterations Maximum iterations for optimization (default: 150)
@@ -71,6 +72,7 @@ scICE_clustering <- function(object,
                             n_workers = 10,
                             n_trials = 15,
                             n_bootstrap = 100,
+                            seed = NULL,
                             beta = 0.1,
                             n_iterations = 10,
                             max_iterations = 150,
@@ -140,6 +142,7 @@ scICE_clustering <- function(object,
     n_workers = n_workers,
     n_trials = n_trials,
     n_bootstrap = n_bootstrap,
+    seed = seed,
     beta = beta,
     n_iterations = n_iterations,
     max_iterations = max_iterations,

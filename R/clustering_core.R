@@ -39,8 +39,14 @@ cross_platform_mclapply <- function(X, FUN, mc.cores = 1, ...) {
 #' @return List with clustering results
 #' @keywords internal
 clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parallel::detectCores() - 1), 
-                          n_trials, n_bootstrap, beta, n_iterations, max_iterations, 
+                          n_trials, n_bootstrap, seed = NULL, beta, n_iterations, max_iterations, 
                           objective_function, remove_threshold, resolution_tolerance, verbose) {
+  
+  # Set random seed if provided for reproducibility
+  if (!is.null(seed)) {
+    set.seed(seed)
+    if (verbose) message(paste("Setting random seed to:", seed))
+  }
   
   # Initialize results storage using data.table for better performance
   results_dt <- data.table::data.table(
@@ -72,7 +78,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   
   gamma_dict <- find_resolution_ranges(
     igraph_obj, cluster_range, start_g, end_g, objective_function,
-    resolution_tolerance, n_workers, verbose
+    resolution_tolerance, n_workers, verbose, seed
   )
   
   # Filter out problematic cluster numbers in parallel
@@ -91,6 +97,12 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
     
     # Test multiple gammas in parallel
             ic_scores <- cross_platform_mclapply(gamma_test, function(gamma_val) {
+      # Set deterministic seed for filtering if base seed provided
+      if (!is.null(seed)) {
+        filter_seed <- seed + cluster_num * 100 + as.integer(gamma_val * 1000) %% 10000
+        set.seed(filter_seed)
+      }
+      
       cluster_results <- replicate(10, {
         leiden_clustering(igraph_obj, gamma_val, objective_function, 5, 0.01)
       }, simplify = TRUE)
@@ -191,7 +203,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
     # Optimize clustering within this range
     result <- optimize_clustering(
       igraph_obj, cluster_num, gamma_range, objective_function,
-      n_trials, n_bootstrap, beta, n_iterations, max_iterations,
+      n_trials, n_bootstrap, seed, beta, n_iterations, max_iterations,
       resolution_tolerance, n_workers
     )
     
@@ -341,7 +353,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
 #' Find resolution parameter ranges for each cluster number using binary search
 #' @keywords internal
 find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
-                                  objective_function, resolution_tolerance, n_workers, verbose) {
+                                  objective_function, resolution_tolerance, n_workers, verbose, seed = NULL) {
   
   # Initialize results storage with data.table
   results_dt <- data.table::data.table(
@@ -372,6 +384,12 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
       gamma_val <- if (objective_function == "modularity") mid else exp(mid)
       
       # Test clustering with current gamma using vectorized operations
+      # Set deterministic seed for lower bound search if base seed provided
+      if (!is.null(seed)) {
+        range_seed <- seed + target_clusters * 10 + iteration_count
+        set.seed(range_seed)
+      }
+      
       cluster_results <- replicate(n_preliminary_trials, {
         leiden_clustering(igraph_obj, gamma_val, objective_function, n_iter_preliminary, beta_preliminary)
       }, simplify = TRUE)
@@ -399,6 +417,12 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
       gamma_val <- if (objective_function == "modularity") mid else exp(mid)
       
       # Test clustering with current gamma using vectorized operations
+      # Set deterministic seed for upper bound search if base seed provided
+      if (!is.null(seed)) {
+        range_seed <- seed + target_clusters * 10 + 100 + iteration_count  # +100 to distinguish from lower bound
+        set.seed(range_seed)
+      }
+      
       cluster_results <- replicate(n_preliminary_trials, {
         leiden_clustering(igraph_obj, gamma_val, objective_function, n_iter_preliminary, beta_preliminary)
       }, simplify = TRUE)
@@ -503,8 +527,14 @@ filter_problematic_clusters <- function(gamma_dict, cluster_range, igraph_obj,
 #' Optimize clustering within a resolution range
 #' @keywords internal
 optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, objective_function,
-                               n_trials, n_bootstrap, beta, n_iterations, max_iterations,
+                               n_trials, n_bootstrap, seed = NULL, beta, n_iterations, max_iterations,
                                resolution_tolerance, n_workers) {
+  
+  # Set deterministic seeds for this cluster number if base seed provided
+  if (!is.null(seed)) {
+    cluster_seed <- seed + target_clusters * 1000  # Different seed per cluster number
+    set.seed(cluster_seed)
+  }
   
   n_steps <- 11
   delta_n <- 2
@@ -528,6 +558,12 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
   
   # Test initial clustering for each gamma in parallel
   clustering_results <- cross_platform_mclapply(gamma_sequence, function(gamma_val) {
+    # Set deterministic seed for this gamma if base seed provided
+    if (!is.null(seed)) {
+      gamma_seed <- cluster_seed + as.integer(gamma_val * 10000) %% 100000
+      set.seed(gamma_seed)
+    }
+    
     cluster_matrix <- replicate(n_trials, {
       leiden_clustering(igraph_obj, gamma_val, objective_function, n_iterations, beta)
     }, simplify = TRUE)
@@ -589,6 +625,12 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
         current_matrix <- current_results[[i]]
         
         # Use previous results as initialization
+        # Set deterministic seed for this iteration if base seed provided
+        if (!is.null(seed)) {
+          iter_seed <- cluster_seed + k * 100 + i
+          set.seed(iter_seed)
+        }
+        
         new_clustering <- replicate(n_trials, {
           init_membership <- current_matrix[, sample.int(ncol(current_matrix), 1)]
           leiden_clustering(igraph_obj, gamma_val, objective_function, delta_n, beta, init_membership)
@@ -648,6 +690,12 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
   
   # Bootstrap analysis in parallel
   ic_bootstrap <- cross_platform_mclapply(seq_len(n_bootstrap), function(i) {
+    # Set deterministic seed for this bootstrap iteration if base seed provided
+    if (!is.null(seed)) {
+      bootstrap_seed <- cluster_seed + 10000 + i
+      set.seed(bootstrap_seed)
+    }
+    
     sample_indices <- sample.int(ncol(best_clustering), ncol(best_clustering), replace = TRUE)
     bootstrap_matrix <- best_clustering[, sample_indices, drop = FALSE]
     extracted <- extract_clustering_array(bootstrap_matrix)

@@ -5,7 +5,7 @@
 \title{Optimize clustering within a resolution range}
 \usage{
 optimize_clustering(igraph_obj, target_clusters, gamma_range, objective_function,
-                   n_trials, n_bootstrap, beta, n_iterations, max_iterations,
+                   n_trials, n_bootstrap, seed = NULL, beta, n_iterations, max_iterations,
                    resolution_tolerance, n_workers)
 }
 \arguments{
@@ -20,6 +20,8 @@ optimize_clustering(igraph_obj, target_clusters, gamma_range, objective_function
   \item{n_trials}{Number of clustering trials per resolution parameter. Higher values increase stability but take longer.}
   
   \item{n_bootstrap}{Number of bootstrap iterations for assessing clustering stability. More iterations provide more reliable stability estimates.}
+  
+  \item{seed}{Random seed for reproducibility (default: NULL). When set, ensures deterministic results for this cluster number.}
   
   \item{beta}{Beta parameter for Leiden clustering (typically between 0 and 1). Controls the resolution of the clustering.}
   
@@ -65,6 +67,15 @@ The function uses several advanced features:
   \item Adaptive sequence generation for gamma values
   \item Stability tracking through IC history
   \item Bootstrap analysis for robustness assessment
+  \item Deterministic seeding when seed is provided
+}
+
+When a seed is provided, the function implements deterministic randomization:
+\itemize{
+  \item Cluster-specific seed derived from base seed
+  \item Gamma-specific seeds for each resolution value
+  \item Trial-specific seeds for each clustering attempt
+  \item Bootstrap-specific seeds for stability assessment
 }
 
 Performance can be tuned through:
@@ -73,6 +84,7 @@ Performance can be tuned through:
   \item n_trials: Balances stability vs. speed
   \item n_bootstrap: Controls reliability of stability assessment
   \item resolution_tolerance: Affects precision of parameter search
+  \item seed: Controls reproducibility of results
 }
 
 The function automatically adapts its behavior based on:
@@ -80,6 +92,7 @@ The function automatically adapts its behavior based on:
   \item Objective function type (modularity vs. CPM)
   \item Initial clustering results
   \item Stability of intermediate solutions
+  \item Presence or absence of seed for reproducibility
 }
 }
 \keyword{internal}

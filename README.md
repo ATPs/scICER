@@ -16,6 +16,10 @@
 - 🚀 **Parallel Processing**: Leverages multiple cores for faster computation
 - 📊 **Comprehensive Visualization**: Built-in plotting functions for result interpretation
 - 📈 **Robust Statistics**: Bootstrap-based confidence intervals and stability assessment
+- 🎯 **Reproducible Analysis**: Optional seed parameter for deterministic results
+- 🔍 **Smart Parameter Recommendations**: Automatically suggests optimal parameters based on dataset size
+- ✅ **Preprocessing Validation**: Checks and guides users through proper Seurat preprocessing
+- 📋 **Comprehensive Reporting**: Generates detailed analysis summaries with interpretation guidance
 
 ### Algorithm Overview
 
@@ -27,6 +31,7 @@ scICER evaluates clustering consistency by:
 4. **Optimization**: Iteratively refines clustering to minimize inconsistency
 5. **Bootstrap Validation**: Assesses stability through bootstrap sampling
 6. **Threshold Application**: Identifies cluster numbers meeting consistency criteria
+7. **Reproducibility Control**: Optional seed parameter for deterministic results
 
 ## Installation
 
@@ -99,24 +104,31 @@ scice_results <- scICE_clustering(
   verbose = TRUE
 )
 
-
+# For reproducible results, use the seed parameter
+scice_results <- scICE_clustering(
+  object = seurat_obj,
+  cluster_range = 3:20,
+  n_workers = n_workers,
+  remove_threshold = Inf,
+  verbose = TRUE,
+  seed = 123  # Set seed for reproducible results
+)
 
 # Visualize results
-plot_ic(scice_results, threshold=Inf)
+plot_ic(scice_results, threshold = Inf)
 
 # Extract consistent clustering labels
 seurat_obj <- get_robust_labels(scice_results, return_seurat = TRUE)
 
-# Visualize with consistent clusters, cluster ange from 3 to 15
+# Visualize with consistent clusters, cluster range from 3 to 15
 xl.fig <- list()
 for (n in 3:15) {
-  if (paste0("clusters_", n) %in% colnames(seurat_obj@meta.data))
-    xl.fig[[n]] <- DimPlot(seurat_obj, group.by = paste0("clusters_", n), label = TRUE) + ggtitle(paste("Clusters:", n))
+  if (paste0("clusters_", n) %in% colnames(seurat_obj@meta.data)){
+    xl.fig[[paste0("clusters_", n)]] <- DimPlot(seurat_obj, group.by = paste0("clusters_", n), label = TRUE) + ggtitle(paste("Clusters:", n))
+  }
 }
 
 cowplot::plot_grid(plotlist = xl.fig, ncol = 3)
-
-
 ```
 
 ## Detailed Usage
@@ -131,6 +143,7 @@ results <- scICE_clustering(
   n_workers = 8,                  # Number of parallel workers  
   n_trials = 15,                  # Clustering trials per resolution
   n_bootstrap = 100,              # Bootstrap iterations
+  seed = 42,                      # Optional: Set for reproducible results
   ic_threshold = 1.005,           # Consistency threshold
   verbose = TRUE                  # Progress messages
 )
@@ -142,7 +155,7 @@ results <- scICE_clustering(
 # Fine-tuned parameters for large datasets
 results <- scICE_clustering(
   object = large_seurat_object,
-  graph_name = "RNA_snn",         # Optional: specify graph name (defaults to active assay's SNN graph)
+  graph_name = "RNA_snn",         # Optional: specify graph name
   cluster_range = 5:12,           # Focused range for efficiency
   objective_function = "CPM",     # "CPM" or "modularity"
   beta = 0.1,                     # Leiden beta parameter
@@ -151,7 +164,8 @@ results <- scICE_clustering(
   remove_threshold = 1.15,        # Filter inconsistent results
   resolution_tolerance = 1e-8,    # Resolution search precision
   n_trials = 10,                  # Reduced for speed
-  n_bootstrap = 50                # Reduced for speed
+  n_bootstrap = 50,               # Reduced for speed
+  seed = 12345                    # For reproducible results
 )
 ```
 
@@ -188,8 +202,12 @@ seurat_obj <- ScaleData(seurat_obj)
 seurat_obj <- RunPCA(seurat_obj)
 seurat_obj <- FindNeighbors(seurat_obj, dims = 1:20)
 
-# Run scICER
-scice_results <- scICE_clustering(seurat_obj, cluster_range = 3:15)
+# Run scICER with reproducibility
+scice_results <- scICE_clustering(
+  seurat_obj, 
+  cluster_range = 3:15,
+  seed = 42  # For reproducible results
+)
 
 # Add consistent clusters to Seurat object
 seurat_obj <- get_robust_labels(scice_results, return_seurat = TRUE)
@@ -235,13 +253,17 @@ The `scICE_clustering()` function returns a list containing:
 ### For Large Datasets (>50k cells)
 
 ```r
+# Get recommended parameters based on dataset size
+recommended <- get_recommended_parameters(seurat_obj)
+
 # Optimized settings for large datasets
 results <- scICE_clustering(
   object = large_seurat_obj,
   cluster_range = 5:15,      # Focused range
   n_trials = 8,              # Fewer trials
   n_bootstrap = 50,          # Fewer bootstrap samples
-  n_workers = detectCores() - 1  # Maximum parallel processing
+  n_workers = detectCores() - 1,  # Maximum parallel processing
+  seed = 42                  # For reproducibility
 )
 ```
 
@@ -250,6 +272,7 @@ results <- scICE_clustering(
 - Reduce `n_trials` and `n_bootstrap` for memory-limited systems
 - Use focused `cluster_range` based on biological expectations
 - Install the `leiden` package for improved performance
+- Use `get_recommended_parameters()` for optimal settings
 
 ## Troubleshooting
 
@@ -257,12 +280,30 @@ results <- scICE_clustering(
 
 1. **"Graph not found" error**: 
    - Run `FindNeighbors()` on your Seurat object first
+   - Use `check_seurat_ready()` to validate preprocessing
    - By default, scICER uses the SNN graph from the active assay (e.g., "RNA_snn")
    - You can check available graphs with `names(your_seurat_object@graphs)`
    - Specify a different graph with the `graph_name` parameter if needed
-2. **No consistent clusters found**: Try adjusting `ic_threshold` (e.g., 1.01) or expanding `cluster_range`
-3. **Memory issues**: Reduce `n_workers`, `n_trials`, or `cluster_range` 
-4. **Slow performance**: Install the `leiden` package and increase `n_workers`
+
+2. **No consistent clusters found**: 
+   - Try adjusting `ic_threshold` (e.g., 1.01)
+   - Expand `cluster_range`
+   - Check preprocessing quality
+   - Use `create_results_summary()` for detailed analysis
+
+3. **Memory issues**: 
+   - Reduce `n_workers`, `n_trials`, or `cluster_range`
+   - Use `get_recommended_parameters()` for guidance
+
+4. **Slow performance**: 
+   - Install the `leiden` package
+   - Increase `n_workers`
+   - Use recommended parameters for your dataset size
+
+5. **Reproducibility issues**:
+   - Always set the `seed` parameter
+   - Keep all other parameters constant
+   - Document parameter values used
 
 ### Performance Optimization
 
@@ -273,6 +314,12 @@ if (requireNamespace("leiden", quietly = TRUE)) {
 } else {
   message("Consider installing 'leiden' package for better performance")
 }
+
+# Validate Seurat object preprocessing
+check_seurat_ready(seurat_obj)
+
+# Get recommended parameters
+params <- get_recommended_parameters(seurat_obj)
 ```
 
 ## Citation
@@ -286,20 +333,7 @@ R package version 1.0.0. https://github.com/ATPs/scICER
 
 *The original scICE algorithm citation will be added upon publication*
 
-## Examples and Vignettes
 
-Comprehensive examples and tutorials are available in the package vignettes:
-
-```r
-# View available vignettes
-browseVignettes("scICER")
-
-# Quick start guide
-vignette("scICER-quickstart", package = "scICER")
-
-# Advanced usage
-vignette("scICER-advanced", package = "scICER")
-```
 
 ## Support and Contributing
 

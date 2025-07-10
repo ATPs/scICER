@@ -5,7 +5,7 @@
 \title{Core clustering algorithm implementing binary search and optimization}
 \usage{
 clustering_main(igraph_obj, cluster_range, n_workers = max(1, parallel::detectCores() - 1),
-               n_trials, n_bootstrap, beta, n_iterations, max_iterations,
+               n_trials, n_bootstrap, seed = NULL, beta, n_iterations, max_iterations,
                objective_function, remove_threshold, resolution_tolerance, verbose)
 }
 \arguments{
@@ -18,6 +18,8 @@ clustering_main(igraph_obj, cluster_range, n_workers = max(1, parallel::detectCo
   \item{n_trials}{Number of clustering trials per resolution parameter. Higher values increase stability but take longer.}
   
   \item{n_bootstrap}{Number of bootstrap iterations for assessing clustering stability. More iterations provide more reliable stability estimates.}
+  
+  \item{seed}{Random seed for reproducibility (default: NULL). When set, ensures deterministic results across multiple runs with the same parameters.}
   
   \item{beta}{Beta parameter for Leiden clustering (typically between 0 and 1). Controls the resolution of the clustering.}
   
@@ -64,11 +66,20 @@ The algorithm proceeds in several steps:
 
 The function uses the data.table package for efficient data manipulation and the parallel package for parallel processing. It automatically determines the optimal number of workers based on available CPU cores.
 
+When a seed is provided, the function implements a hierarchical seeding strategy:
+\itemize{
+  \item Base seed controls overall randomization
+  \item Cluster-specific seeds derived from base seed
+  \item Trial-specific seeds for each clustering attempt
+  \item Bootstrap-specific seeds for stability assessment
+}
+
 Performance can be tuned through several parameters:
 \itemize{
   \item Increase n_workers for faster processing on multi-core systems
   \item Adjust n_trials and n_bootstrap to balance accuracy vs. speed
   \item Modify resolution_tolerance to control precision of parameter search
+  \item Set seed for reproducible results across multiple runs
 }
 }
 \keyword{internal}
