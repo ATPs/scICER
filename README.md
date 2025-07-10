@@ -333,7 +333,52 @@ R package version 1.0.0. https://github.com/ATPs/scICER
 
 *The original scICE algorithm citation will be added upon publication*
 
+## Q&A
 
+### How does scICER select the final clustering solution?
+
+For each number of clusters (e.g., when testing 3-10 clusters):
+1. The algorithm runs `n_trials` independent clustering attempts (default: 15)
+2. Each trial uses the Leiden algorithm with different random initializations
+3. For each cluster number:
+   - Calculates pairwise similarities between all trial results using Element-Centric Similarity (ECS)
+   - Computes an Inconsistency (IC) score measuring how different the clustering solutions are
+   - A lower IC score indicates more consistent clustering across trials
+4. For cluster numbers with IC scores below your threshold (e.g., < 1.05):
+   - Selects the "best" clustering solution from the trials
+   - The "best" solution is the one with highest average similarity to other solutions (most representative)
+   - This becomes the reported clustering for that number of clusters
+
+So when you get results showing clusters 3-10 have IC scores < 1.05, it means:
+- Each of these cluster numbers produced stable results across different random initializations
+- The reported clustering solution is the most representative one from all trials
+- You can be confident in using these clustering solutions for downstream analysis
+
+### Will increasing n_trials or n_bootstrap improve results?
+
+**n_trials**:
+- Increasing `n_trials` (default: 15) can improve the robustness of results
+- More trials = more chances to find truly stable clustering solutions
+- For large datasets, you might want to reduce trials to improve speed
+- Recommended ranges:
+  - Small datasets (<10k cells): 15-20 trials
+  - Medium datasets (10k-50k cells): 10-15 trials
+  - Large datasets (>50k cells): 8-10 trials
+
+**n_bootstrap**:
+- Increasing `n_bootstrap` (default: 100) improves confidence in IC score estimates
+- More bootstrap iterations = more accurate stability assessment
+- The default 100 iterations is usually sufficient
+- Consider increasing for:
+  - Critical analyses requiring high confidence
+  - Publications or benchmark studies
+  - Unusual or complex datasets
+- Recommended ranges:
+  - Standard analysis: 100 iterations
+  - High-confidence analysis: 200-500 iterations
+  - Note: Higher values increase computation time
+
+Remember: Quality preprocessing (normalization, feature selection, dimensionality reduction) often has more impact than increasing these parameters.
 
 ## Support and Contributing
 
