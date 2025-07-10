@@ -115,7 +115,7 @@ scice_results <- scICE_clustering(
 )
 
 # Visualize results
-plot_ic(scice_results, threshold = Inf)
+plot_ic(scice_results, threshold = 1.005)
 
 # Extract consistent clustering labels
 seurat_obj <- get_robust_labels(scice_results, return_seurat = TRUE)
@@ -168,6 +168,8 @@ results <- scICE_clustering(
   seed = 12345                    # For reproducible results
 )
 ```
+
+It's OK to set a large `remove_threshold` value, because `plot_ic` and `get_robust_labels` all have default `threshold = 1.005`.
 
 ### 3. Visualization and Results
 
