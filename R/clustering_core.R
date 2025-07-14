@@ -93,7 +93,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
     }
     
     gamma_range <- gamma_dict[[as.character(cluster_num)]]
-    gamma_test <- seq(gamma_range[1], gamma_range[2], length.out = min(5, diff(gamma_range) * 100 + 1))
+    gamma_test <- seq(gamma_range[1], gamma_range[2], length.out = min(5, abs(diff(gamma_range)) * 100 + 1))
     
     # Test multiple gammas in parallel
             ic_scores <- cross_platform_mclapply(gamma_test, function(gamma_val) {
@@ -504,7 +504,7 @@ filter_problematic_clusters <- function(gamma_dict, cluster_range, igraph_obj,
     gamma_range <- gamma_dict[[as.character(cluster_num)]]
     
     # Test multiple gammas in the range
-    gamma_test <- seq(gamma_range[1], gamma_range[2], length.out = min(5, diff(gamma_range) * 100 + 1))
+    gamma_test <- seq(gamma_range[1], gamma_range[2], length.out = min(5, abs(diff(gamma_range)) * 100 + 1))
     
     ic_scores <- sapply(gamma_test, function(gamma_val) {
       cluster_results <- replicate(10, {
