@@ -59,7 +59,7 @@ if (!requireNamespace("devtools", quietly = TRUE))
     install.packages("devtools")
 
 # Install scICER from GitHub
-devtools::install_github("ATPs/scICER")
+devtools::install_github("ATPs/scICER", upgrade = "never")#avoid upgrade packages and use existing ones
 ```
 
 ### Load the package
