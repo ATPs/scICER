@@ -919,7 +919,6 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
       message(paste(worker_id, ": Phase 4 completed in", round(iterative_time, 3), "seconds after", iteration_count, "iterations"))
     }
   }
-  }
   
   # Bootstrap analysis in parallel
   if (verbose) {
