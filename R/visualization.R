@@ -35,8 +35,18 @@ plot_ic <- function(scice_results, threshold = 1.005, figure_size = c(10, 6),
     stop("Input must be a scICE results object")
   }
 
+  # Check if there are any IC results to plot
   if (length(scice_results$ic_vec) == 0) {
-    stop("No IC results found in scICE object")
+    # Create empty plot with message when no IC results are found
+    empty_plot <- ggplot2::ggplot() +
+      ggplot2::theme_void() +
+      ggplot2::labs(title = title) +
+      ggplot2::annotate("text", x = 0.5, y = 0.5, 
+                       label = "NO consistent cluster numbers found", 
+                       size = 8, color = "red", fontface = "bold") +
+      ggplot2::xlim(0, 1) +
+      ggplot2::ylim(0, 1)
+    return(empty_plot)
   }
 
   # Handle both old results (without excluded info) and new results (with excluded info)
@@ -50,7 +60,16 @@ plot_ic <- function(scice_results, threshold = 1.005, figure_size = c(10, 6),
   }
   
   if (length(valid_indices) == 0) {
-    stop("No valid IC results found for plotting")
+    # Create empty plot with message when no valid IC results are found
+    empty_plot <- ggplot2::ggplot() +
+      ggplot2::theme_void() +
+      ggplot2::labs(title = title) +
+      ggplot2::annotate("text", x = 0.5, y = 0.5, 
+                       label = "NO consistent cluster numbers found", 
+                       size = 8, color = "red", fontface = "bold") +
+      ggplot2::xlim(0, 1) +
+      ggplot2::ylim(0, 1)
+    return(empty_plot)
   }
   
   # Create plot data for valid clusters

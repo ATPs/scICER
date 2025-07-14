@@ -45,7 +45,10 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   # Set random seed if provided for reproducibility
   if (!is.null(seed)) {
     set.seed(seed)
-    if (verbose) message(paste("Setting random seed to:", seed))
+    if (verbose) {
+      message(paste("CLUSTERING_MAIN: Setting random seed to:", seed))
+      message(paste("CLUSTERING_MAIN: Thread context - PID:", Sys.getpid()))
+    }
   }
   
   # Initialize results storage using data.table for better performance
@@ -74,18 +77,50 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   }
   
   # Binary search for resolution ranges
-  if (verbose) message("Performing binary search for resolution ranges...")
+  if (verbose) {
+    message("CLUSTERING_MAIN: Starting binary search for resolution ranges...")
+    message(paste("CLUSTERING_MAIN: Objective function:", objective_function))
+    message(paste("CLUSTERING_MAIN: Search bounds: [", start_g, ", ", end_g, "]", sep = ""))
+    message(paste("CLUSTERING_MAIN: Target cluster range:", paste(cluster_range, collapse = ", ")))
+    resolution_search_start <- Sys.time()
+  }
   
   gamma_dict <- find_resolution_ranges(
     igraph_obj, cluster_range, start_g, end_g, objective_function,
     resolution_tolerance, n_workers, verbose, seed
   )
   
+  if (verbose) {
+    resolution_search_time <- as.numeric(difftime(Sys.time(), resolution_search_start, units = "secs"))
+    message(paste("CLUSTERING_MAIN: Resolution search completed in", round(resolution_search_time, 3), "seconds"))
+    message(paste("CLUSTERING_MAIN: Found resolution ranges for", length(gamma_dict), "cluster numbers"))
+    if (length(gamma_dict) > 0) {
+      for (i in 1:min(5, length(gamma_dict))) {
+        cluster_num <- names(gamma_dict)[i]
+        range_vals <- gamma_dict[[cluster_num]]
+        message(paste("CLUSTERING_MAIN:   k=", cluster_num, ": gamma ∈ [", 
+                     round(range_vals[1], 4), ", ", round(range_vals[2], 4), "]", sep = ""))
+      }
+      if (length(gamma_dict) > 5) {
+        message(paste("CLUSTERING_MAIN:   ... and", length(gamma_dict) - 5, "more"))
+      }
+    }
+  }
+  
   # Filter out problematic cluster numbers in parallel
-  if (verbose) message("Filtering problematic clusters...")
+  if (verbose) {
+    message("CLUSTERING_MAIN: Starting problematic cluster filtering...")
+    message(paste("CLUSTERING_MAIN: Remove threshold:", remove_threshold))
+    message(paste("CLUSTERING_MAIN: Platform:", .Platform$OS.type))
+    filtering_start <- Sys.time()
+  }
   
   # Windows compatibility for parallel processing
   actual_workers <- if (.Platform$OS.type == "windows" && n_workers > 1) 1 else n_workers
+  
+  if (verbose) {
+    message(paste("CLUSTERING_MAIN: Using", actual_workers, "workers for filtering (requested:", n_workers, ")"))
+  }
   
   cluster_filter_results <- cross_platform_mclapply(cluster_range, function(cluster_num) {
     if (!(as.character(cluster_num) %in% names(gamma_dict))) {
@@ -122,11 +157,34 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   excluded_numbers <- sapply(cluster_filter_results, function(x) if(x$excluded) x$cluster_num else NULL)
   excluded_numbers <- unlist(excluded_numbers)
   
-  if (verbose && length(excluded_numbers) > 0) {
-    message(paste("Excluded cluster numbers:", paste(excluded_numbers, collapse = ", ")))
+  if (verbose) {
+    filtering_time <- as.numeric(difftime(Sys.time(), filtering_start, units = "secs"))
+    message(paste("CLUSTERING_MAIN: Filtering completed in", round(filtering_time, 3), "seconds"))
+    message(paste("CLUSTERING_MAIN: Processed", length(cluster_filter_results), "cluster numbers"))
+    if (length(excluded_numbers) > 0) {
+      message(paste("CLUSTERING_MAIN: Excluded", length(excluded_numbers), "cluster numbers:", paste(excluded_numbers, collapse = ", ")))
+      # Report exclusion reasons
+      exclusion_reasons <- sapply(cluster_filter_results, function(x) if(x$excluded) paste(x$cluster_num, ":", x$reason) else NULL)
+      exclusion_reasons <- unlist(exclusion_reasons)
+      if (length(exclusion_reasons) > 0) {
+        message("CLUSTERING_MAIN: Exclusion reasons:")
+        for (reason in exclusion_reasons) {
+          message(paste("CLUSTERING_MAIN:   ", reason))
+        }
+      }
+    } else {
+      message("CLUSTERING_MAIN: No clusters excluded during filtering")
+    }
   }
   
   valid_clusters <- setdiff(cluster_range, excluded_numbers)
+  
+  if (verbose) {
+    message(paste("CLUSTERING_MAIN: Valid clusters for optimization:", length(valid_clusters)))
+    if (length(valid_clusters) > 0) {
+      message(paste("CLUSTERING_MAIN: Valid cluster numbers:", paste(valid_clusters, collapse = ", ")))
+    }
+  }
   
   # Create entries for excluded clusters
   excluded_entries <- lapply(cluster_filter_results, function(x) {
@@ -170,7 +228,12 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   }
   
   if (length(valid_clusters) == 0) {
-    if (verbose) message("No valid cluster numbers found")
+    if (verbose) {
+      message("CLUSTERING_MAIN: WARNING - No valid cluster numbers found!")
+      message("CLUSTERING_MAIN: All clusters were excluded during filtering")
+      message("CLUSTERING_MAIN: This will result in empty IC results")
+      message("CLUSTERING_MAIN: Returning results with only excluded cluster information")
+    }
     # Return results with only excluded clusters
     return(list(
       gamma = excluded_entries$gamma,
@@ -188,10 +251,18 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   }
   
   # Optimize clustering for each valid cluster number in parallel
-  if (verbose) message("Optimizing clustering for each valid cluster number...")
+  if (verbose) {
+    message("CLUSTERING_MAIN: Starting clustering optimization...")
+    message(paste("CLUSTERING_MAIN: Optimizing", length(valid_clusters), "cluster numbers"))
+    optimization_start <- Sys.time()
+  }
   
   # Windows compatibility for clustering optimization
   actual_workers_opt <- if (.Platform$OS.type == "windows" && n_workers > 1) 1 else n_workers
+  
+  if (verbose) {
+    message(paste("CLUSTERING_MAIN: Using", actual_workers_opt, "workers for optimization"))
+  }
   
   cluster_results <- cross_platform_mclapply(valid_clusters, function(cluster_num) {
     if (!(as.character(cluster_num) %in% names(gamma_dict))) {

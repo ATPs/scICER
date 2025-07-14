@@ -60,18 +60,33 @@ graph_to_igraph <- function(seurat_graph, verbose = FALSE) {
   # Seurat graphs are typically stored as sparse matrices
   if (inherits(seurat_graph, "dgCMatrix") || inherits(seurat_graph, "Matrix")) {
     if (verbose) {
-      message("Converting sparse matrix to igraph...")
-      message(sprintf("Matrix dimensions: %d x %d", nrow(seurat_graph), ncol(seurat_graph)))
+      message("GRAPH_TO_IGRAPH: Starting sparse matrix to igraph conversion...")
+      message(paste("GRAPH_TO_IGRAPH: Thread context - PID:", Sys.getpid()))
+      message(paste("GRAPH_TO_IGRAPH: Matrix class:", paste(class(seurat_graph), collapse = ", ")))
+      message(paste("GRAPH_TO_IGRAPH: Matrix dimensions:", nrow(seurat_graph), "x", ncol(seurat_graph)))
+      message(paste("GRAPH_TO_IGRAPH: Matrix storage mode:", typeof(seurat_graph)))
     }
     
     # Get non-zero entries using Matrix package methods
+    if (verbose) {
+      message("GRAPH_TO_IGRAPH: Extracting non-zero entries...")
+      matrix_start <- Sys.time()
+    }
+    
     indices <- Matrix::which(seurat_graph > 0, arr.ind = TRUE)
     weights <- as.vector(seurat_graph[indices])
     
     if (verbose) {
-      message(sprintf("Found %d non-zero entries", length(weights)))
+      matrix_time <- as.numeric(difftime(Sys.time(), matrix_start, units = "secs"))
+      message(paste("GRAPH_TO_IGRAPH: Extraction completed in", round(matrix_time, 3), "seconds"))
+      message(paste("GRAPH_TO_IGRAPH: Found", length(weights), "non-zero entries"))
+      total_entries <- nrow(seurat_graph) * ncol(seurat_graph)
+      sparsity <- (1 - length(weights) / total_entries) * 100
+      message(paste("GRAPH_TO_IGRAPH: Matrix sparsity:", round(sparsity, 2), "%"))
       if (length(weights) > 0) {
-        message(sprintf("Weight range: [%.4f, %.4f]", min(weights), max(weights)))
+        message(paste("GRAPH_TO_IGRAPH: Weight range: [", round(min(weights), 4), ", ", round(max(weights), 4), "]", sep = ""))
+        message(paste("GRAPH_TO_IGRAPH: Mean weight:", round(mean(weights), 4)))
+        message(paste("GRAPH_TO_IGRAPH: Median weight:", round(median(weights), 4)))
       }
     }
     
@@ -80,14 +95,17 @@ graph_to_igraph <- function(seurat_graph, verbose = FALSE) {
     edges_matrix <- indices
     
     if (verbose) {
-      message(sprintf("Created edge list with %d edges", nrow(edges_matrix)))
+      message(paste("GRAPH_TO_IGRAPH: Created edge list with", nrow(edges_matrix), "edges"))
       if (nrow(edges_matrix) > 0) {
-        message(sprintf("Vertex index range: [%d, %d]", 
-                       min(edges_matrix), max(edges_matrix)))
-        message("First few edges (from, to):")
+        message(paste("GRAPH_TO_IGRAPH: Vertex index range: [", min(edges_matrix), ", ", max(edges_matrix), "]", sep = ""))
+        message("GRAPH_TO_IGRAPH: Sample edges (from -> to):")
         head_edges <- utils::head(edges_matrix, 5)
         for(i in seq_len(nrow(head_edges))) {
-          message(sprintf("  %d -> %d", head_edges[i,1], head_edges[i,2]))
+          weight_val <- weights[i]
+          message(paste("GRAPH_TO_IGRAPH:   ", head_edges[i,1], " -> ", head_edges[i,2], " (weight: ", round(weight_val, 4), ")", sep = ""))
+        }
+        if (nrow(edges_matrix) > 5) {
+          message(paste("GRAPH_TO_IGRAPH:   ... and", nrow(edges_matrix) - 5, "more edges"))
         }
       }
     }
@@ -95,7 +113,8 @@ graph_to_igraph <- function(seurat_graph, verbose = FALSE) {
     # Create igraph object
     n_vertices <- nrow(seurat_graph)
     if (verbose) {
-      message(sprintf("Creating empty graph with %d vertices", n_vertices))
+      message(paste("GRAPH_TO_IGRAPH: Creating empty graph with", n_vertices, "vertices"))
+      graph_creation_start <- Sys.time()
     }
     
     igraph_obj <- igraph::make_empty_graph(n = n_vertices, directed = FALSE)
@@ -103,7 +122,7 @@ graph_to_igraph <- function(seurat_graph, verbose = FALSE) {
     # Add edges with weights if there are any edges
     if (nrow(edges_matrix) > 0) {
       if (verbose) {
-        message("Adding edges to graph...")
+        message("GRAPH_TO_IGRAPH: Adding edges and weights to graph...")
       }
       
       # Add edges from the matrix
@@ -111,8 +130,23 @@ graph_to_igraph <- function(seurat_graph, verbose = FALSE) {
       igraph::E(igraph_obj)$weight <- weights
       
       if (verbose) {
-        message(sprintf("Graph created successfully with %d vertices and %d edges", 
-                       igraph::vcount(igraph_obj), igraph::ecount(igraph_obj)))
+        graph_creation_time <- as.numeric(difftime(Sys.time(), graph_creation_start, units = "secs"))
+        message(paste("GRAPH_TO_IGRAPH: Graph creation completed in", round(graph_creation_time, 3), "seconds"))
+        message(paste("GRAPH_TO_IGRAPH: Final graph: vertices =", igraph::vcount(igraph_obj), ", edges =", igraph::ecount(igraph_obj)))
+        message(paste("GRAPH_TO_IGRAPH: Graph is directed:", igraph::is_directed(igraph_obj)))
+        message(paste("GRAPH_TO_IGRAPH: Graph is weighted:", igraph::is_weighted(igraph_obj)))
+        if (igraph::is_weighted(igraph_obj)) {
+          edge_weights <- igraph::E(igraph_obj)$weight
+          message(paste("GRAPH_TO_IGRAPH: Edge weights summary:"))
+          message(paste("GRAPH_TO_IGRAPH:   Min:", round(min(edge_weights), 4)))
+          message(paste("GRAPH_TO_IGRAPH:   Max:", round(max(edge_weights), 4)))
+          message(paste("GRAPH_TO_IGRAPH:   Mean:", round(mean(edge_weights), 4)))
+          message(paste("GRAPH_TO_IGRAPH:   Median:", round(median(edge_weights), 4)))
+        }
+      }
+    } else {
+      if (verbose) {
+        message("GRAPH_TO_IGRAPH: WARNING - No edges to add! Graph will be empty.")
       }
     }
     
