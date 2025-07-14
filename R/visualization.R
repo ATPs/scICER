@@ -240,7 +240,8 @@ get_robust_labels <- function(scice_results, threshold = 1.005, return_seurat = 
   
   if (return_seurat) {
     if (is.null(scice_results$seurat_object)) {
-      stop("No Seurat object found in scICE results")
+      warning("No Seurat object found in scICE results. Returning data frame instead.")
+      return(output_df)
     }
     
     # Add metadata to Seurat object
