@@ -10,6 +10,7 @@ sclens(
   p_step = 0.001,
   n_perturb = 20,
   centering = "mean",
+  is_normalized = FALSE,
   reduction_name_all = "sclens_pca_all",
   reduction_name_filtered = "sclens_pca_filtered",
   n_threads = 1,
@@ -30,6 +31,8 @@ sclens(
 \item{n_perturb}{Number of perturbations for robustness test (default: 20)}
 
 \item{centering}{Centering method ("mean" or "median", default: "mean")}
+
+\item{is_normalized}{Whether the data is already normalized (default: FALSE). If TRUE, skips scLENS normalization steps (log1p transformation, L1 normalization, z-score with L2 normalization). Use TRUE when working with pre-normalized data from "data" or "scale.data" slots.}
 
 \item{reduction_name_all}{Name for all PCs reduction (default: "sclens_pca_all")}
 
@@ -111,6 +114,22 @@ pbmc_small <- sclens(
   n_perturb = 30,            # More perturbations for better stability
   n_threads = 4,             # Use 4 CPU cores
   centering = "median"       # Use median centering
+)
+
+# Using pre-normalized data (skip scLENS normalization)
+pbmc_normalized <- NormalizeData(pbmc_small)
+pbmc_normalized <- sclens(
+  pbmc_normalized,
+  slot = "data",             # Use normalized data slot
+  is_normalized = TRUE       # Skip scLENS normalization steps
+)
+
+# Using scaled data
+pbmc_scaled <- NormalizeData(pbmc_small) %>% ScaleData()
+pbmc_scaled <- sclens(
+  pbmc_scaled,
+  slot = "scale.data",       # Use scaled data slot
+  is_normalized = TRUE       # Skip scLENS normalization steps
 )
 
 # Access detailed results

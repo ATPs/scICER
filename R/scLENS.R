@@ -549,6 +549,7 @@ get_sigev <- function(X, Xr) {
 #' @param p_step Decrement level for sparsity in robustness test (default: 0.001)
 #' @param n_perturb Number of perturbations for robustness test (default: 20)
 #' @param centering Centering method ("mean" or "median", default: "mean")
+#' @param is_normalized Whether the data is already normalized (default: FALSE). If TRUE, skips scLENS normalization steps (log1p transformation, L1 normalization, z-score with L2 normalization). Use TRUE when working with pre-normalized data from "data" or "scale.data" slots
 #' @param reduction_name_all Name for all PCs reduction (default: "sclens_pca_all")
 #' @param reduction_name_filtered Name for filtered PCs reduction (default: "sclens_pca_filtered")
 #' @param n_threads Number of threads to use for parallel processing (default: 1)
@@ -575,8 +576,20 @@ get_sigev <- function(X, Xr) {
 #' # Load Seurat object
 #' data(pbmc_small)
 #' 
-#' # Run scLENS analysis
+#' # Basic scLENS analysis with raw counts
 #' pbmc_small <- sclens(pbmc_small, n_threads = 2)
+#' 
+#' # Using pre-normalized data
+#' pbmc_normalized <- NormalizeData(pbmc_small)
+#' pbmc_normalized <- sclens(pbmc_normalized, 
+#'                          slot = "data", 
+#'                          is_normalized = TRUE)
+#' 
+#' # Using scaled data
+#' pbmc_scaled <- pbmc_small %>% NormalizeData() %>% ScaleData()
+#' pbmc_scaled <- sclens(pbmc_scaled, 
+#'                      slot = "scale.data", 
+#'                      is_normalized = TRUE)
 #' 
 #' # Check reductions
 #' Reductions(pbmc_small)
@@ -593,6 +606,7 @@ sclens <- function(seurat_obj,
                    p_step = 0.001, 
                    n_perturb = 20, 
                    centering = "mean",
+                   is_normalized = FALSE,
                    reduction_name_all = "sclens_pca_all",
                    reduction_name_filtered = "sclens_pca_filtered",
                    n_threads = 5,
@@ -623,6 +637,7 @@ sclens <- function(seurat_obj,
     message(paste("  Perturbation step:", p_step))
     message(paste("  Number of perturbations:", n_perturb))
     message(paste("  Centering method:", centering))
+    message(paste("  Data already normalized:", ifelse(is_normalized, "YES", "NO")))
     message(paste("  Output reduction (all):", reduction_name_all))
     message(paste("  Output reduction (filtered):", reduction_name_filtered))
     message(paste("  Number of threads:", n_threads))
@@ -730,20 +745,35 @@ sclens <- function(seurat_obj,
     message("DATA PREPROCESSING:")
     preprocessing_start <- Sys.time()
     message(paste("  Starting preprocessing at:", format(preprocessing_start, "%H:%M:%S")))
-    message(paste("  Centering method:", centering))
+    if (is_normalized) {
+      message(paste("  Data normalization: SKIPPED (is_normalized = TRUE)"))
+      message(paste("  Using data as-is from slot:", slot))
+    } else {
+      message(paste("  Data normalization: APPLYING (is_normalized = FALSE)"))
+      message(paste("  Centering method:", centering))
+    }
   }
   
-  scaled_X <- logn_scale(pre_scale(X_))
+  if (is_normalized) {
+    # Skip normalization and use data as-is
+    scaled_X <- as.matrix(X_)
+    if (verbose) {
+      message(paste("  Using pre-normalized data without transformation"))
+    }
+  } else {
+    # Apply scLENS normalization pipeline
+    scaled_X <- logn_scale(pre_scale(X_))
+  }
   
   if (verbose) {
     preprocessing_end <- Sys.time()
     preprocessing_time <- as.numeric(difftime(preprocessing_end, preprocessing_start, units = "secs"))
     message(paste("  Preprocessing completed in:", round(preprocessing_time, 3), "seconds"))
-    message(paste("  Scaled matrix dimensions:", nrow(scaled_X), "x", ncol(scaled_X)))
-    message(paste("  Scaled matrix class:", paste(class(scaled_X), collapse = ", ")))
+    message(paste("  Matrix dimensions:", nrow(scaled_X), "x", ncol(scaled_X)))
+    message(paste("  Matrix class:", paste(class(scaled_X), collapse = ", ")))
     if (is.matrix(scaled_X)) {
-      message(paste("  Value range after scaling: [", round(min(scaled_X), 4), ", ", round(max(scaled_X), 4), "]", sep = ""))
-      message(paste("  Mean value after scaling:", round(mean(scaled_X), 4)))
+      message(paste("  Value range: [", round(min(scaled_X), 4), ", ", round(max(scaled_X), 4), "]", sep = ""))
+      message(paste("  Mean value:", round(mean(scaled_X), 4)))
       message(paste("  Standard deviation:", round(sd(as.vector(scaled_X)), 4)))
     }
   }
@@ -762,7 +792,14 @@ sclens <- function(seurat_obj,
     message(paste("  Generating randomized null model..."))
   }
   
-  rmt_result <- get_sigev(scaled_X, logn_scale(pre_scale(X_r)))
+  # Apply same normalization logic to randomized matrix
+  if (is_normalized) {
+    scaled_X_r <- as.matrix(X_r)
+  } else {
+    scaled_X_r <- logn_scale(pre_scale(X_r))
+  }
+  
+  rmt_result <- get_sigev(scaled_X, scaled_X_r)
   
   if (verbose) {
     rmt_end <- Sys.time()
@@ -888,8 +925,12 @@ sclens <- function(seurat_obj,
         
         tmp_X <- Matrix::sparseMatrix(i = perturb_i, j = perturb_j, x = perturb_x, dims = c(N, M))
         
-        # Get eigenvectors from perturbed matrix
-        tmp_result <- get_eigvec(logn_scale(pre_scale(tmp_X)))
+        # Get eigenvectors from perturbed matrix (apply same normalization logic)
+        if (is_normalized) {
+          tmp_result <- get_eigvec(as.matrix(tmp_X))
+        } else {
+          tmp_result <- get_eigvec(logn_scale(pre_scale(tmp_X)))
+        }
         tmp_nV <- tmp_result$eigenvectors
         tmp_nL <- tmp_result$eigenvalues
         
@@ -934,8 +975,12 @@ sclens <- function(seurat_obj,
         
         tmp_X <- Matrix::sparseMatrix(i = perturb_i, j = perturb_j, x = perturb_x, dims = c(N, M))
         
-        # Get eigenvectors from perturbed matrix
-        tmp_result <- get_eigvec(logn_scale(pre_scale(tmp_X)))
+        # Get eigenvectors from perturbed matrix (apply same normalization logic)
+        if (is_normalized) {
+          tmp_result <- get_eigvec(as.matrix(tmp_X))
+        } else {
+          tmp_result <- get_eigvec(logn_scale(pre_scale(tmp_X)))
+        }
         tmp_nV <- tmp_result$eigenvectors
         tmp_nL <- tmp_result$eigenvalues
         

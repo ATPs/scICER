@@ -234,6 +234,7 @@ scICER also includes **scLENS**, a dimensionality reduction method that uses Ran
 - 🎯 **Noise Filtering**: Automatically filters out noise-dominated components
 - ⚡ **Parallel Processing**: Supports multi-core computation for faster analysis
 - 🔧 **Seurat Integration**: Seamlessly works with Seurat objects and workflows
+- 📊 **Flexible Normalization**: Works with raw counts or pre-normalized data (set `is_normalized = TRUE` for "data" or "scale.data" slots)
 
 ### Quick Start with scLENS
 
@@ -285,10 +286,31 @@ seurat_obj <- sclens(
   p_step = 0.001,                  # Decrement level for sparsity testing
   n_perturb = 20,                  # Number of perturbations for robustness
   centering = "mean",              # Centering method ("mean" or "median")
+  is_normalized = FALSE,           # Whether data is already normalized
   reduction_name_all = "sclens_all",        # Name for all signals reduction
   reduction_name_filtered = "sclens_robust", # Name for robust signals reduction
   n_threads = 4,                   # Number of parallel threads
   verbose = TRUE                   # Show detailed progress
+)
+
+# Working with pre-normalized data
+# If your data is already normalized (e.g., from "data" or "scale.data" slots),
+# set is_normalized = TRUE to skip scLENS normalization steps
+seurat_normalized <- NormalizeData(seurat_obj)
+seurat_normalized <- sclens(
+  seurat_normalized,
+  slot = "data",                   # Use normalized data
+  is_normalized = TRUE,            # Skip scLENS normalization
+  verbose = TRUE
+)
+
+# Or with scaled data
+seurat_scaled <- seurat_obj %>% NormalizeData() %>% ScaleData()
+seurat_scaled <- sclens(
+  seurat_scaled,
+  slot = "scale.data",             # Use scaled data
+  is_normalized = TRUE,            # Skip scLENS normalization
+  verbose = TRUE
 )
 
 # Access scLENS results
