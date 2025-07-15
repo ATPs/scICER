@@ -239,7 +239,8 @@ scICE_clustering <- function(object,
     objective_function = objective_function,
     remove_threshold = remove_threshold,
     resolution_tolerance = resolution_tolerance,
-    verbose = verbose
+    verbose = verbose,
+    in_parallel_context = FALSE
   )
   
   if (verbose) {

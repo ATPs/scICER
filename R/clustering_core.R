@@ -36,11 +36,13 @@ cross_platform_mclapply <- function(X, FUN, mc.cores = 1, ...) {
 #' @param remove_threshold Threshold for removing inconsistent results
 #' @param resolution_tolerance Tolerance for resolution parameter search
 #' @param verbose Whether to print progress messages
+#' @param in_parallel_context Whether this function is called from within a parallel context (default: FALSE)
 #' @return List with clustering results
 #' @keywords internal
 clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parallel::detectCores() - 1), 
                           n_trials, n_bootstrap, seed = NULL, beta, n_iterations, max_iterations, 
-                          objective_function, remove_threshold, resolution_tolerance, verbose) {
+                          objective_function, remove_threshold, resolution_tolerance, verbose, 
+                          in_parallel_context = FALSE) {
   
   # Set random seed if provided for reproducibility
   if (!is.null(seed)) {
@@ -87,7 +89,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   
   gamma_dict <- find_resolution_ranges(
     igraph_obj, cluster_range, start_g, end_g, objective_function,
-    resolution_tolerance, n_workers, verbose, seed
+    resolution_tolerance, n_workers, verbose, seed, in_parallel_context
   )
   
   if (verbose) {
@@ -120,6 +122,9 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   
   if (verbose) {
     message(paste("CLUSTERING_MAIN: Using", actual_workers, "workers for filtering (requested:", n_workers, ")"))
+    if (in_parallel_context) {
+      message("CLUSTERING_MAIN: Running in parallel context - using 1 worker for nested operations")
+    }
   }
   
   cluster_filter_results <- cross_platform_mclapply(cluster_range, function(cluster_num) {
@@ -130,7 +135,8 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
     gamma_range <- gamma_dict[[as.character(cluster_num)]]
     gamma_test <- seq(gamma_range[1], gamma_range[2], length.out = min(5, abs(diff(gamma_range)) * 100 + 1))
     
-    # Test multiple gammas in parallel
+    # Test multiple gammas in parallel (use 1 worker if already in parallel context)
+    nested_workers <- if (in_parallel_context) 1 else actual_workers
             ic_scores <- cross_platform_mclapply(gamma_test, function(gamma_val) {
       # Set deterministic seed for filtering if base seed provided
       if (!is.null(seed)) {
@@ -145,7 +151,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
       extracted_results <- extract_clustering_array(cluster_results)
       ic_result <- calculate_ic_from_extracted(extracted_results)
       return(1 / ic_result)
-          }, mc.cores = actual_workers)
+          }, mc.cores = nested_workers)
       
       ic_scores <- unlist(ic_scores)
       excluded <- min(ic_scores, na.rm = TRUE) >= remove_threshold
@@ -301,7 +307,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
     result <- optimize_clustering(
       igraph_obj, cluster_num, gamma_range, objective_function,
       n_trials, n_bootstrap, seed, beta, n_iterations, max_iterations,
-      resolution_tolerance, n_workers, verbose, worker_id
+      resolution_tolerance, n_workers, verbose, worker_id, in_parallel_context = TRUE
     )
     
     if (verbose) {
@@ -462,7 +468,8 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
 #' Find resolution parameter ranges for each cluster number using binary search
 #' @keywords internal
 find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
-                                  objective_function, resolution_tolerance, n_workers, verbose, seed = NULL) {
+                                  objective_function, resolution_tolerance, n_workers, verbose, seed = NULL, 
+                                  in_parallel_context = FALSE) {
   
   # Initialize results storage with data.table
   results_dt <- data.table::data.table(
@@ -479,6 +486,9 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
   if (.Platform$OS.type == "windows" && n_workers > 1) {
     n_workers <- 1  # Force single worker on Windows
   }
+  
+  # Use 1 worker if already in parallel context to prevent nested parallelization
+  nested_workers <- if (in_parallel_context) 1 else n_workers
   
   range_results <- cross_platform_mclapply(cluster_range, function(target_clusters) {
     left <- start_g
@@ -569,7 +579,7 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
       left_bound = if (objective_function == "CPM") exp(left_bound) else left_bound,
       right_bound = if (objective_function == "CPM") exp(right_bound) else right_bound
     )
-  }, mc.cores = n_workers)
+  }, mc.cores = nested_workers)
   
   # Combine results
   # Filter out NULL results from parallel processing
@@ -637,7 +647,8 @@ filter_problematic_clusters <- function(gamma_dict, cluster_range, igraph_obj,
 #' @keywords internal
 optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, objective_function,
                                n_trials, n_bootstrap, seed = NULL, beta, n_iterations, max_iterations,
-                               resolution_tolerance, n_workers, verbose = FALSE, worker_id = "OPTIMIZER") {
+                               resolution_tolerance, n_workers, verbose = FALSE, worker_id = "OPTIMIZER", 
+                               in_parallel_context = FALSE) {
   
   # Set deterministic seeds for this cluster number if base seed provided
   if (!is.null(seed)) {
@@ -697,7 +708,13 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
   if (verbose) {
     message(paste(worker_id, ": Phase 1 - Testing", length(gamma_sequence), "gamma values with", n_trials, "trials each"))
     initial_phase_start <- Sys.time()
+    if (in_parallel_context) {
+      message(paste(worker_id, ": Running in parallel context - using 1 worker for nested operations"))
+    }
   }
+  
+  # Use 1 worker if already in parallel context to prevent nested parallelization
+  nested_workers <- if (in_parallel_context) 1 else n_workers
   
   clustering_results <- cross_platform_mclapply(gamma_sequence, function(gamma_val) {
     # Set deterministic seed for this gamma if base seed provided
@@ -721,7 +738,7 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
       matrix = cluster_matrix,
       mean_clusters = mean_clusters
     )
-  }, mc.cores = n_workers)
+  }, mc.cores = nested_workers)
   
   if (verbose) {
     initial_phase_time <- as.numeric(difftime(Sys.time(), initial_phase_start, units = "secs"))
@@ -769,7 +786,7 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
     extracted <- extract_clustering_array(cluster_matrix)
     ic_result <- calculate_ic_from_extracted(extracted)
     return(1 / ic_result)  # Convert to inconsistency score
-  }, mc.cores = n_workers)
+  }, mc.cores = nested_workers)
   
   ic_scores <- unlist(ic_scores)
   
@@ -847,7 +864,7 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
           matrix = new_clustering,
           ic = 1 / ic_result
         )
-      }, mc.cores = n_workers)
+      }, mc.cores = nested_workers)
       
       # Extract results
       new_matrices <- lapply(new_results, function(x) x$matrix)
@@ -938,7 +955,7 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
     extracted <- extract_clustering_array(bootstrap_matrix)
     ic_result <- calculate_ic_from_extracted(extracted)
     return(1 / ic_result)
-  }, mc.cores = n_workers)
+  }, mc.cores = nested_workers)
   
   ic_bootstrap <- unlist(ic_bootstrap)
   ic_median <- stats::median(ic_bootstrap)
