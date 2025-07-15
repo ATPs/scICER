@@ -52,3 +52,6 @@ rsconnect/
 *.rds
 
 test_*\.R
+*.pdf
+*.qs
+

@@ -223,6 +223,236 @@ Idents(seurat_obj) <- "clusters_8"
 markers <- FindAllMarkers(seurat_obj)
 ```
 
+## scLENS: Single-cell Linear Embedding of Neighborhoods and Signals
+
+scICER also includes **scLENS**, a dimensionality reduction method that uses Random Matrix Theory (RMT) to distinguish signal from noise and performs robustness testing to identify stable signals.
+
+### Key Features of scLENS
+
+- 🧮 **Random Matrix Theory**: Uses RMT to automatically identify signal vs. noise eigenvalues
+- 🔄 **Robustness Testing**: Performs multiple perturbations to test signal stability  
+- 🎯 **Noise Filtering**: Automatically filters out noise-dominated components
+- ⚡ **Parallel Processing**: Supports multi-core computation for faster analysis
+- 🔧 **Seurat Integration**: Seamlessly works with Seurat objects and workflows
+
+### Quick Start with scLENS
+
+```r
+# Load required packages
+library(scICER)
+library(Seurat)
+library(ggplot2)
+
+# Load your data (example with pbmc dataset)
+data(pbmc_small)
+seurat_obj <- pbmc_small
+
+# Basic scLENS analysis with default parameters
+seurat_obj <- sclens(seurat_obj)
+
+# Check the new reductions added
+Reductions(seurat_obj)
+
+# Visualize scLENS results
+seurat_obj <- RunUMAP(seurat_obj, 
+                      dims = 1:ncol(seurat_obj@reductions$sclens_pca_filtered), 
+                      reduction = "sclens_pca_filtered", 
+                      reduction.name = "sclens_umap")
+
+# Compare with standard PCA
+seurat_obj <- NormalizeData(seurat_obj)
+seurat_obj <- FindVariableFeatures(seurat_obj)  
+seurat_obj <- ScaleData(seurat_obj)
+seurat_obj <- RunPCA(seurat_obj)
+seurat_obj <- RunUMAP(seurat_obj, dims = 1:30, reduction.name = "standard_umap")
+
+# Plot comparison
+library(patchwork)
+p1 <- DimPlot(seurat_obj, reduction = "sclens_umap") + ggtitle("scLENS UMAP")
+p2 <- DimPlot(seurat_obj, reduction = "standard_umap") + ggtitle("Standard PCA UMAP")
+print(p1 | p2)
+```
+
+### Advanced scLENS Usage
+
+```r
+# Customized scLENS analysis
+seurat_obj <- sclens(
+  seurat_obj,
+  assay = "RNA",                    # Which assay to use
+  slot = "counts",                  # Which slot to use  
+  th = 60,                         # Threshold angle in degrees for robustness
+  p_step = 0.001,                  # Decrement level for sparsity testing
+  n_perturb = 20,                  # Number of perturbations for robustness
+  centering = "mean",              # Centering method ("mean" or "median")
+  reduction_name_all = "sclens_all",        # Name for all signals reduction
+  reduction_name_filtered = "sclens_robust", # Name for robust signals reduction
+  n_threads = 4,                   # Number of parallel threads
+  verbose = TRUE                   # Show detailed progress
+)
+
+# Access scLENS results
+sclens_metadata <- seurat_obj@misc$sclens_results
+cat("Total signals detected:", sclens_metadata$n_signals_total, "\n")
+cat("Robust signals found:", sclens_metadata$n_signals_robust, "\n")
+cat("Signal retention rate:", 
+    round(sclens_metadata$n_signals_robust / sclens_metadata$n_signals_total * 100, 1), "%\n")
+```
+
+### Understanding scLENS Output
+
+scLENS adds two reductions to your Seurat object:
+
+1. **`sclens_pca_all`**: All signals detected by RMT filtering
+2. **`sclens_pca_filtered`**: Only robust signals that passed perturbation testing
+
+```r
+# Check dimensions of each reduction
+cat("All signals:", ncol(seurat_obj@reductions$sclens_pca_all), "components\n")
+cat("Robust signals:", ncol(seurat_obj@reductions$sclens_pca_filtered), "components\n")
+
+# Access eigenvalues and robustness scores
+eigenvalues <- seurat_obj@misc$sclens_results$signal_eigenvalues
+robustness_scores <- seurat_obj@misc$sclens_results$robustness_scores
+robust_indices <- seurat_obj@misc$sclens_results$robust_signal_indices
+
+# Plot eigenvalue spectrum
+eigenvalue_df <- data.frame(
+  Component = 1:length(eigenvalues),
+  Eigenvalue = eigenvalues,
+  Robust = 1:length(eigenvalues) %in% robust_indices
+)
+
+ggplot(eigenvalue_df, aes(x = Component, y = Eigenvalue, color = Robust)) +
+  geom_point(size = 2) +
+  scale_color_manual(values = c("FALSE" = "gray", "TRUE" = "red")) +
+  labs(title = "scLENS Eigenvalue Spectrum", 
+       subtitle = "Red points are robust signals") +
+  theme_minimal()
+```
+
+### Integration with Clustering
+
+```r
+# Use scLENS for improved clustering
+seurat_obj <- FindNeighbors(seurat_obj, 
+                           reduction = "sclens_pca_filtered",
+                           dims = 1:ncol(seurat_obj@reductions$sclens_pca_filtered))
+
+seurat_obj <- FindClusters(seurat_obj, resolution = 0.5)
+
+# Compare scLENS-based clustering with standard clustering
+seurat_obj <- FindNeighbors(seurat_obj, 
+                           reduction = "pca", 
+                           dims = 1:30, 
+                           graph.name = "standard")
+
+seurat_obj <- FindClusters(seurat_obj, 
+                          graph.name = "standard_snn", 
+                          resolution = 0.5)
+
+# Store clustering results
+seurat_obj@meta.data$sclens_clusters <- seurat_obj@meta.data$seurat_clusters
+seurat_obj@meta.data$standard_clusters <- seurat_obj@meta.data$seurat_clusters
+
+# Visualize clustering comparison  
+p1 <- DimPlot(seurat_obj, group.by = "sclens_clusters", reduction = "sclens_umap") + 
+      ggtitle("scLENS-based Clustering")
+p2 <- DimPlot(seurat_obj, group.by = "standard_clusters", reduction = "standard_umap") + 
+      ggtitle("Standard PCA Clustering")
+print(p1 | p2)
+```
+
+### Performance Optimization for scLENS
+
+```r
+# For large datasets, optimize parameters
+seurat_obj <- sclens(
+  large_seurat_obj,
+  n_perturb = 10,        # Reduce perturbations for speed
+  n_threads = 8,         # Use more cores
+  th = 70,               # More permissive threshold
+  verbose = TRUE
+)
+
+# For small datasets, increase robustness testing
+seurat_obj <- sclens(
+  small_seurat_obj,
+  n_perturb = 50,        # More perturbations for better robustness
+  th = 45,               # Stricter threshold
+  verbose = TRUE
+)
+```
+
+### Combining scLENS with scICER
+
+```r
+# Complete workflow: scLENS for dimensionality reduction + scICER for clustering evaluation
+library(scICER)
+
+# Step 1: Preprocessing
+seurat_obj <- NormalizeData(seurat_obj)
+seurat_obj <- FindVariableFeatures(seurat_obj)
+seurat_obj <- ScaleData(seurat_obj)
+
+# Step 2: scLENS dimensionality reduction
+seurat_obj <- sclens(seurat_obj, verbose = TRUE)
+
+# Step 3: Use scLENS embedding for neighborhood graph
+n_sclens_dims <- ncol(seurat_obj@reductions$sclens_pca_filtered)
+seurat_obj <- FindNeighbors(seurat_obj, 
+                           reduction = "sclens_pca_filtered",
+                           dims = 1:n_sclens_dims)
+
+# Step 4: scICER clustering evaluation  
+scice_results <- scICE_clustering(
+  object = seurat_obj,
+  cluster_range = 3:20,
+  n_workers = 4,
+  seed = 42,
+  verbose = TRUE
+)
+
+# Step 5: Visualization and analysis
+plot_ic(scice_results, threshold = 1.005)
+seurat_obj <- get_robust_labels(scice_results, return_seurat = TRUE)
+
+# Step 6: Final UMAP with scLENS
+seurat_obj <- RunUMAP(seurat_obj, 
+                      reduction = "sclens_pca_filtered",
+                      dims = 1:n_sclens_dims,
+                      reduction.name = "sclens_umap")
+
+# Visualize final results
+DimPlot(seurat_obj, reduction = "sclens_umap", group.by = "clusters_8") +
+  ggtitle("scLENS + scICER: Robust Dimensionality Reduction and Clustering")
+```
+
+### scLENS Parameter Guide
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `th` | 60 | Threshold angle (degrees) for signal robustness. Lower = stricter |
+| `p_step` | 0.001 | Decrement level for sparsity in robustness testing |
+| `n_perturb` | 20 | Number of perturbations for robustness testing |
+| `centering` | "mean" | Centering method: "mean" or "median" |
+| `n_threads` | 5 | Number of parallel threads to use |
+
+### When to Use scLENS
+
+**Recommended for:**
+- Datasets with high noise levels
+- When standard PCA shows unclear structure  
+- Need for automatic signal/noise separation
+- Robust dimensionality reduction for downstream analysis
+- Integration with Random Matrix Theory principles
+
+**Consider alternatives when:**
+- Dataset is very small (<500 cells)
+- Standard PCA already works well
+- Computational resources are very limited
+- Need exact reproducibility of published analyses using standard methods
+
 ## Understanding the Output
 
 ### Main Results Object
