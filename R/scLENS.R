@@ -238,6 +238,10 @@ mp_parameters <- function(L) {
   moment_1 <- mean(L)
   moment_2 <- mean(L^2)
   gamma <- moment_2 / moment_1^2 - 1
+  
+  # Simple fix: ensure gamma is non-negative for sqrt calculation
+  if (!is.finite(gamma) || gamma < 0) gamma <- 0
+  
   s <- moment_1
   sigma <- moment_2
   b_plus <- s * (1 + sqrt(gamma))^2
@@ -276,6 +280,7 @@ mp_calculation <- function(L, Lr, eta = 1, eps = 1e-6, max_iter = 10000) {
   b_minus <- mpp_Lr$b_minus
   
   L_updated <- L[L > b_minus & L < b_plus]
+
   new_mpp_L <- mp_parameters(L_updated)
   new_b_plus <- new_mpp_L$b_plus
   new_b_minus <- new_mpp_L$b_minus
@@ -284,9 +289,10 @@ mp_calculation <- function(L, Lr, eta = 1, eps = 1e-6, max_iter = 10000) {
     loss <- (1 - new_b_plus / b_plus)^2
     iter <- iter + 1
     
-    if (loss <= eps) {
+    # Defensive Check: Is the loss value valid?
+    if (is.na(loss) || loss <= eps) {
       converged <- TRUE
-    } else if (iter == max_iter) {
+    } else if (iter >= max_iter) {
       cat("Max iterations exceeded!\n")
       converged <- TRUE
     } else {
@@ -296,7 +302,12 @@ mp_calculation <- function(L, Lr, eta = 1, eps = 1e-6, max_iter = 10000) {
       b_plus <- new_b_plus
       b_minus <- new_b_minus
       
-      if (length(L_updated) > 0) {
+      # Defensive Check: Are there enough points to continue?
+      if (length(L_updated) < 2) {
+        warning("Iteration stopped because fewer than 2 eigenvalues remained in the MP bounds.")
+        converged <- TRUE # Stop the loop gracefully
+      } else {
+        # Continue with calculations...
         up_mpp_L <- mp_parameters(L_updated)
         new_b_plus <- up_mpp_L$b_plus
         new_b_minus <- up_mpp_L$b_minus
