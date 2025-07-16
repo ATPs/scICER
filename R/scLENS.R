@@ -779,7 +779,8 @@ sclens <- function(seurat_obj,
   if (is_normalized) {
     # Use pre-normalized data but ensure it's centered for RMT analysis
     # This preserves existing normalization while making data suitable for covariance matrix calculations
-    scaled_X <- scale(as.matrix(X_), center = TRUE, scale = FALSE)
+    # scaled_X <- scale(as.matrix(X_), center = TRUE, scale = FALSE)
+    scaled_X <- logn_scale(X_)
     if (verbose) {
       message(paste("  Using pre-normalized data with centering applied"))
       message(paste("  Data was centered but not scaled to preserve existing normalization"))
