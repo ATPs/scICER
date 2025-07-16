@@ -80,19 +80,22 @@ zscore_with_l2 <- function(X) {
   # Normalize by standard deviation
   X_norm <- X %*% Matrix::Diagonal(x = 1 / std_cols)
   
+  # Ensure X_norm is a matrix
+  X_norm <- base::as.matrix(X_norm)
+  
   # Calculate column means
   mu <- base::matrix(base::colMeans(X_norm), nrow = 1)
   
   # Calculate L2 norms
-  l2X <- sqrt(Matrix::rowSums(X_norm^2))
+  l2X <- sqrt(base::rowSums(X_norm^2))
   l2mu <- base::norm(mu, type = "F")
   
   # Calculate L2 normalized distances
   mu_matrix <- base::matrix(base::rep(mu, nrow(X_norm)), nrow = nrow(X_norm), byrow = TRUE)
-  l2norm_ <- sqrt(l2X^2 - 2 * rowSums(X_norm * mu_matrix) + l2mu^2)
+  l2norm_ <- sqrt(l2X^2 - 2 * base::rowSums(X_norm * mu_matrix) + l2mu^2)
   
   # Final normalization
-  result <- (as.matrix(X_norm) - mu_matrix) / (l2norm_ / base::mean(l2norm_))
+  result <- (X_norm - mu_matrix) / (l2norm_ / base::mean(l2norm_))
   
   return(result)
 }
@@ -459,7 +462,7 @@ get_sigev <- function(X, Xr) {
     tw_result <- tw_calculation(L, L_mp)
     lambda_c <- tw_result$lambda_c
     
-    cat("Number of signal eigenvalues:", sum(L > lambda_c), "\n")
+    cat("Number of signal eigenvalues:", base::sum(L > lambda_c), "\n")
     
     # Extract signal eigenvalues and eigenvectors
     sel_L <- L[L > lambda_c]
@@ -527,7 +530,7 @@ get_sigev <- function(X, Xr) {
     tw_result <- tw_calculation(L, L_mp)
     lambda_c <- tw_result$lambda_c
     
-    cat("Number of signal eigenvalues:", sum(L > lambda_c), "\n")
+    cat("Number of signal eigenvalues:", base::sum(L > lambda_c), "\n")
     
     sel_L <- L[L > lambda_c]
     sel_Vs <- V[, L > lambda_c, drop = FALSE]
@@ -717,7 +720,7 @@ sclens <- function(seurat_obj,
     message(paste("  Matrix dimensions:", nrow(X_), "x", ncol(X_), "(cells x genes)"))
     message(paste("  Matrix class:", paste(class(X_), collapse = ", ")))
     if (base::inherits(X_, "sparseMatrix")) {
-      n_nonzero <- sum(X_ > 0)
+      n_nonzero <- base::sum(X_ > 0)
       message(paste("  Non-zero entries:", n_nonzero))
       message(paste("  Sparsity:", round((1 - n_nonzero / (nrow(X_) * ncol(X_))) * 100, 2), "%"))
       if (n_nonzero > 0) {
@@ -934,7 +937,7 @@ sclens <- function(seurat_obj,
                                                         "X_summary", "z_idx1", "z_idx2", "selected_sparsity", 
                                                         "M", "N", "min_pc", "verbose", "n_perturb"),
                                              .packages = c("Matrix", "Seurat")) %dopar% {
-      if (verbose && i %% max(1, floor(n_perturb/10)) == 0) {
+      if (verbose && i %% base::max(1, base::floor(n_perturb/10)) == 0) {
         cat("Perturbation", i, "of", n_perturb, "(Thread", Sys.getpid(), ")\n")
       }
       
@@ -1073,7 +1076,7 @@ sclens <- function(seurat_obj,
   
   # Filter signals based on robustness threshold
   # Julia equivalent: sig_id = findall(rob_score .> th_)
-  sig_id <- which(rob_scores > th_)
+  sig_id <- base::which(rob_scores > th_)
   
   if (verbose) {
     robustness_calc_end <- Sys.time()
