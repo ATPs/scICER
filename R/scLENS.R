@@ -755,10 +755,12 @@ sclens <- function(seurat_obj,
   }
   
   if (is_normalized) {
-    # Skip normalization and use data as-is
-    scaled_X <- as.matrix(X_)
+    # Use pre-normalized data but ensure it's centered for RMT analysis
+    # This preserves existing normalization while making data suitable for covariance matrix calculations
+    scaled_X <- scale(as.matrix(X_), center = TRUE, scale = FALSE)
     if (verbose) {
-      message(paste("  Using pre-normalized data without transformation"))
+      message(paste("  Using pre-normalized data with centering applied"))
+      message(paste("  Data was centered but not scaled to preserve existing normalization"))
     }
   } else {
     # Apply scLENS normalization pipeline
@@ -794,7 +796,7 @@ sclens <- function(seurat_obj,
   
   # Apply same normalization logic to randomized matrix
   if (is_normalized) {
-    scaled_X_r <- as.matrix(X_r)
+    scaled_X_r <- scale(as.matrix(X_r), center = TRUE, scale = FALSE)
   } else {
     scaled_X_r <- logn_scale(pre_scale(X_r))
   }
@@ -927,7 +929,7 @@ sclens <- function(seurat_obj,
         
         # Get eigenvectors from perturbed matrix (apply same normalization logic)
         if (is_normalized) {
-          tmp_result <- get_eigvec(as.matrix(tmp_X))
+          tmp_result <- get_eigvec(scale(as.matrix(tmp_X), center = TRUE, scale = FALSE))
         } else {
           tmp_result <- get_eigvec(logn_scale(pre_scale(tmp_X)))
         }
@@ -977,7 +979,7 @@ sclens <- function(seurat_obj,
         
         # Get eigenvectors from perturbed matrix (apply same normalization logic)
         if (is_normalized) {
-          tmp_result <- get_eigvec(as.matrix(tmp_X))
+          tmp_result <- get_eigvec(scale(as.matrix(tmp_X), center = TRUE, scale = FALSE))
         } else {
           tmp_result <- get_eigvec(logn_scale(pre_scale(tmp_X)))
         }
