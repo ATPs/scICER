@@ -135,8 +135,17 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
     gamma_range <- gamma_dict[[as.character(cluster_num)]]
     gamma_test <- seq(gamma_range[1], gamma_range[2], length.out = min(5, abs(diff(gamma_range)) * 100 + 1))
     
-    # Test multiple gammas in parallel (use 1 worker if already in parallel context)
-    nested_workers <- if (in_parallel_context) 1 else actual_workers
+    # Test multiple gammas in parallel (distribute workers efficiently when in parallel context)
+    nested_workers <- if (in_parallel_context) {
+      max(1, as.integer(round(actual_workers / length(cluster_range))))
+    } else {
+      actual_workers
+    }
+    
+    if (verbose && in_parallel_context) {
+      message(paste("CLUSTERING_MAIN: Nested worker optimization - using", nested_workers, 
+                   "workers per cluster (", actual_workers, "total /", length(cluster_range), "clusters)"))
+    }
             ic_scores <- cross_platform_mclapply(gamma_test, function(gamma_val) {
       # Set deterministic seed for filtering if base seed provided
       if (!is.null(seed)) {
@@ -487,8 +496,17 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
     n_workers <- 1  # Force single worker on Windows
   }
   
-  # Use 1 worker if already in parallel context to prevent nested parallelization
-  nested_workers <- if (in_parallel_context) 1 else n_workers
+  # Use distributed workers if already in parallel context to maximize efficiency
+  nested_workers <- if (in_parallel_context) {
+    max(1, as.integer(round(n_workers / length(cluster_range))))
+  } else {
+    n_workers
+  }
+  
+  if (verbose && in_parallel_context) {
+    message(paste("RESOLUTION_SEARCH: Nested worker optimization - using", nested_workers, 
+                 "workers per cluster (", n_workers, "total /", length(cluster_range), "clusters)"))
+  }
   
   range_results <- cross_platform_mclapply(cluster_range, function(target_clusters) {
     left <- start_g
@@ -713,8 +731,17 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
     }
   }
   
-  # Use 1 worker if already in parallel context to prevent nested parallelization
-  nested_workers <- if (in_parallel_context) 1 else n_workers
+  # Use distributed workers if already in parallel context to maximize efficiency
+  nested_workers <- if (in_parallel_context) {
+    max(1, as.integer(round(n_workers / length(gamma_sequence))))
+  } else {
+    n_workers
+  }
+  
+  if (verbose && in_parallel_context) {
+    message(paste(worker_id, ": Nested worker optimization - using", nested_workers, 
+                 "workers per gamma (", n_workers, "total /", length(gamma_sequence), "gammas)"))
+  }
   
   clustering_results <- cross_platform_mclapply(gamma_sequence, function(gamma_val) {
     # Set deterministic seed for this gamma if base seed provided
