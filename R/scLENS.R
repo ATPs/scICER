@@ -281,6 +281,17 @@ mp_calculation <- function(L, Lr, eta = 1, eps = 1e-6, max_iter = 10000) {
   
   L_updated <- L[L > b_minus & L < b_plus]
 
+  # Add a check to handle cases with few or no eigenvalues in the initial MP bounds.
+  if (length(L_updated) < 2) {
+    warning("Initial filtering resulted in fewer than 2 eigenvalues to estimate the MP distribution. Skipping iterative calculation.")
+    # Return the initial bounds from the random matrix.
+    return(list(
+      L_filtered = L_updated,
+      b_plus = b_plus,
+      b_minus = b_minus
+    ))
+  }
+
   new_mpp_L <- mp_parameters(L_updated)
   new_b_plus <- new_mpp_L$b_plus
   new_b_minus <- new_mpp_L$b_minus
