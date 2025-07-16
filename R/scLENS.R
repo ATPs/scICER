@@ -23,16 +23,16 @@ seurat_to_sparse <- function(seurat_obj, assay = "RNA", slot = "counts") {
   # Note: Seurat stores as genes x cells, Julia used cells x genes
   
   # Handle SeuratObject v5+ deprecation of slot parameter
-  if (packageVersion("SeuratObject") >= "5.0.0") {
+  if (utils::packageVersion("SeuratObject") >= "5.0.0") {
     # Use layer parameter for SeuratObject v5+
-    count_matrix <- GetAssayData(seurat_obj, assay = assay, layer = slot)
+    count_matrix <- Seurat::GetAssayData(seurat_obj, assay = assay, layer = slot)
   } else {
     # Use slot parameter for older versions
-    count_matrix <- GetAssayData(seurat_obj, assay = assay, slot = slot)
+    count_matrix <- Seurat::GetAssayData(seurat_obj, assay = assay, slot = slot)
   }
   
   # Convert to dgCMatrix if not already
-  if (!inherits(count_matrix, "dgCMatrix")) {
+  if (!base::inherits(count_matrix, "dgCMatrix")) {
     count_matrix <- as(count_matrix, "dgCMatrix")
   }
   
@@ -74,25 +74,25 @@ zscore_with_l2 <- function(X) {
   # (Matrix(X_norm) .- mu) ./ (l2norm_ / mean(l2norm_))
   
   # Calculate column standard deviations
-  std_cols <- apply(X, 2, sd)
+  std_cols <- base::apply(X, 2, stats::sd)
   std_cols[std_cols == 0] <- 1  # Avoid division by zero
   
   # Normalize by standard deviation
   X_norm <- X %*% Matrix::Diagonal(x = 1 / std_cols)
   
   # Calculate column means
-  mu <- matrix(colMeans(X_norm), nrow = 1)
+  mu <- base::matrix(base::colMeans(X_norm), nrow = 1)
   
   # Calculate L2 norms
-  l2X <- sqrt(rowSums(X_norm^2))
-  l2mu <- norm(mu, type = "F")
+  l2X <- sqrt(Matrix::rowSums(X_norm^2))
+  l2mu <- base::norm(mu, type = "F")
   
   # Calculate L2 normalized distances
-  mu_matrix <- matrix(rep(mu, nrow(X_norm)), nrow = nrow(X_norm), byrow = TRUE)
+  mu_matrix <- base::matrix(base::rep(mu, nrow(X_norm)), nrow = nrow(X_norm), byrow = TRUE)
   l2norm_ <- sqrt(l2X^2 - 2 * rowSums(X_norm * mu_matrix) + l2mu^2)
   
   # Final normalization
-  result <- (as.matrix(X_norm) - mu_matrix) / (l2norm_ / mean(l2norm_))
+  result <- (as.matrix(X_norm) - mu_matrix) / (l2norm_ / base::mean(l2norm_))
   
   return(result)
 }
@@ -109,24 +109,24 @@ scaled_gdata <- function(X, position_ = "mean") {
   
   if (position_ == "mean") {
     # Calculate means and standard deviations by column
-    col_means <- colMeans(X)
-    col_sds <- apply(X, 2, sd)
+    col_means <- base::colMeans(X)
+    col_sds <- base::apply(X, 2, stats::sd)
     col_sds[col_sds == 0] <- 1  # Avoid division by zero
     
     # Center and scale
-    X_centered <- sweep(X, 2, col_means, "-")
-    X_scaled <- sweep(X_centered, 2, col_sds, "/")
+    X_centered <- base::sweep(X, 2, col_means, "-")
+    X_scaled <- base::sweep(X_centered, 2, col_sds, "/")
     
     return(X_scaled)
   } else if (position_ == "median") {
     # Calculate medians and MADs by column
-    col_medians <- apply(X, 2, median)
-    col_mads <- apply(X, 2, mad)
+    col_medians <- base::apply(X, 2, stats::median)
+    col_mads <- base::apply(X, 2, stats::mad)
     col_mads[col_mads == 0] <- 1  # Avoid division by zero
     
     # Center and scale
-    X_centered <- sweep(X, 2, col_medians, "-")
-    X_scaled <- sweep(X_centered, 2, col_mads, "/")
+    X_centered <- base::sweep(X, 2, col_medians, "-")
+    X_scaled <- base::sweep(X_centered, 2, col_mads, "/")
     
     return(X_scaled)
   } else {
@@ -151,10 +151,10 @@ random_nz <- function(X, rmix = TRUE) {
   # tmp_X.nzval .= shuffle(nz_val)
   
   # Get non-zero indices and values
-  X_triplet <- summary(X)
+  X_triplet <- Matrix::summary(X)
   
   # Shuffle the values while keeping the sparsity pattern
-  shuffled_values <- sample(X_triplet$x)
+  shuffled_values <- base::sample(X_triplet$x)
   
   # Create new sparse matrix with shuffled values
   X_random <- Matrix::sparseMatrix(
@@ -167,7 +167,7 @@ random_nz <- function(X, rmix = TRUE) {
   if (rmix) {
     # Additional randomization of the matrix structure
     # This is a simplified version of the Julia _random_matrix function
-    X_random <- X_random[sample(nrow(X_random)), ]
+    X_random <- X_random[base::sample(nrow(X_random)), ]
   }
   
   return(X_random)
@@ -190,8 +190,8 @@ wishart_matrix <- function(X) {
   # return out ./ size(X,2)
   
   # Convert sparse matrix to dense if needed for computation
-  if (inherits(X, "sparseMatrix")) {
-    X <- as.matrix(X)
+  if (methods::is(X, "sparseMatrix")) {
+    X <- base::as.matrix(X)
   }
   
   # Compute X %*% t(X) / ncol(X)
@@ -211,7 +211,7 @@ get_eigen <- function(Y) {
   # return tmp_L, tmp_V
   
   # Compute eigendecomposition
-  eigen_result <- eigen(Y, symmetric = TRUE)
+  eigen_result <- base::eigen(Y, symmetric = TRUE)
   
   return(list(
     values = eigen_result$values,
@@ -235,8 +235,8 @@ mp_parameters <- function(L) {
   # b_minus = s * (1 - sqrt(gamma))^2
   # x_peak = s * (1.0-gamma)^2.0 / (1.0+gamma)
   
-  moment_1 <- mean(L)
-  moment_2 <- mean(L^2)
+  moment_1 <- base::mean(L)
+  moment_2 <- base::mean(L^2)
   gamma <- moment_2 / moment_1^2 - 1
   
   # Simple fix: ensure gamma is non-negative for sqrt calculation
@@ -352,7 +352,7 @@ tw_calculation <- function(L, L_mp) {
   gamma <- mpp$gamma
   p <- length(L) / gamma
   sigma <- 1 / p^(2/3) * gamma^(5/6) * (1 + sqrt(gamma))^(4/3)
-  lambda_c <- mean(L_mp) * (1 + sqrt(gamma))^2 + sigma
+  lambda_c <- base::mean(L_mp) * (1 + sqrt(gamma))^2 + sigma
   
   return(list(
     lambda_c = lambda_c,
@@ -393,7 +393,7 @@ get_eigvec <- function(X) {
     V <- V[, positive_idx, drop = FALSE]
     
     # Sort by eigenvalue magnitude (descending)
-    sort_idx <- order(L, decreasing = TRUE)
+    sort_idx <- base::order(L, decreasing = TRUE)
     nL <- L[sort_idx]
     nVs <- V[, sort_idx, drop = FALSE]
     
@@ -401,7 +401,7 @@ get_eigvec <- function(X) {
     # This is a simplified version of the Julia projection
     mul_X <- nVs %*% diag(1 / sqrt(nL))
     new_nVs <- X %*% mul_X
-    new_nVs <- apply(new_nVs, 2, function(x) x / norm(x, type = "2"))
+    new_nVs <- base::apply(new_nVs, 2, function(x) x / base::norm(x, type = "2"))
     
     return(list(eigenvalues = nL, eigenvectors = new_nVs))
   } else {
@@ -416,7 +416,7 @@ get_eigvec <- function(X) {
     V <- V[, positive_idx, drop = FALSE]
     
     # Sort by eigenvalue magnitude (descending)
-    sort_idx <- order(L, decreasing = TRUE)
+    sort_idx <- base::order(L, decreasing = TRUE)
     nL <- L[sort_idx]
     nVs <- V[, sort_idx, drop = FALSE]
     
@@ -472,21 +472,21 @@ get_sigev <- function(X, Xr) {
     
     # Sort by eigenvalue magnitude
     if (length(sel_L) > 0) {
-      signal_sort_idx <- order(sel_L, decreasing = TRUE)
+      signal_sort_idx <- base::order(sel_L, decreasing = TRUE)
       nL <- sel_L[signal_sort_idx]
       nVs <- sel_Vs[, signal_sort_idx, drop = FALSE]
       
       # Project to original space
       mul_X <- nVs %*% diag(1 / sqrt(nL))
       new_nVs <- X %*% mul_X
-      new_nVs <- apply(new_nVs, 2, function(x) x / norm(x, type = "2"))
+      new_nVs <- base::apply(new_nVs, 2, function(x) x / base::norm(x, type = "2"))
     } else {
       nL <- numeric(0)
       new_nVs <- matrix(nrow = n, ncol = 0)
     }
     
     if (length(noise_L) > 0) {
-      noise_sort_idx <- order(noise_L, decreasing = TRUE)
+      noise_sort_idx <- base::order(noise_L, decreasing = TRUE)
       snL <- noise_L[noise_sort_idx]
       noise_Vs_sorted <- noise_V[, noise_sort_idx, drop = FALSE]
       
@@ -537,7 +537,7 @@ get_sigev <- function(X, Xr) {
     noise_V <- V[, noise_idx, drop = FALSE]
     
     if (length(sel_L) > 0) {
-      signal_sort_idx <- order(sel_L, decreasing = TRUE)
+      signal_sort_idx <- base::order(sel_L, decreasing = TRUE)
       nL <- sel_L[signal_sort_idx]
       nVs <- sel_Vs[, signal_sort_idx, drop = FALSE]
     } else {
@@ -551,8 +551,8 @@ get_sigev <- function(X, Xr) {
       all_eigenvalues = L,
       mp_eigenvalues = L_mp,
       lambda_c = lambda_c,
-      noise_eigenvalues = noise_L[order(noise_L, decreasing = TRUE)],
-      noise_eigenvectors = noise_V[, order(noise_L, decreasing = TRUE), drop = FALSE]
+      noise_eigenvalues = noise_L[base::order(noise_L, decreasing = TRUE)],
+      noise_eigenvectors = noise_V[, base::order(noise_L, decreasing = TRUE), drop = FALSE]
     ))
   }
 }
@@ -635,7 +635,7 @@ sclens <- function(seurat_obj,
                    verbose = TRUE) {
   
   # Validate inputs
-  if (!inherits(seurat_obj, "Seurat")) {
+  if (!base::inherits(seurat_obj, "Seurat")) {
     stop("seurat_obj must be a Seurat object")
   }
   
@@ -676,7 +676,7 @@ sclens <- function(seurat_obj,
   
   if (n_threads > 1) {
     if (!foreach::getDoParRegistered()) {
-      actual_threads <- min(n_threads, parallel::detectCores() - 1)
+      actual_threads <- base::min(n_threads, parallel::detectCores() - 1)
       if (verbose) {
         message(paste("  Creating cluster with", actual_threads, "workers"))
         message(paste("  Thread setup: Creating parallel cluster"))
@@ -716,14 +716,14 @@ sclens <- function(seurat_obj,
     message(paste("  Data extraction completed in:", round(extraction_time, 3), "seconds"))
     message(paste("  Matrix dimensions:", nrow(X_), "x", ncol(X_), "(cells x genes)"))
     message(paste("  Matrix class:", paste(class(X_), collapse = ", ")))
-    if (inherits(X_, "sparseMatrix")) {
+    if (base::inherits(X_, "sparseMatrix")) {
       n_nonzero <- sum(X_ > 0)
       message(paste("  Non-zero entries:", n_nonzero))
       message(paste("  Sparsity:", round((1 - n_nonzero / (nrow(X_) * ncol(X_))) * 100, 2), "%"))
       if (n_nonzero > 0) {
         values <- as.vector(X_[X_ > 0])
         message(paste("  Value range: [", round(min(values), 4), ", ", round(max(values), 4), "]", sep = ""))
-        message(paste("  Mean value:", round(mean(values), 4)))
+        message(paste("  Mean value:", round(base::mean(values), 4)))
       }
     }
   }
@@ -779,7 +779,7 @@ sclens <- function(seurat_obj,
   if (is_normalized) {
     # Use pre-normalized data but ensure it's centered for RMT analysis
     # This preserves existing normalization while making data suitable for covariance matrix calculations
-    # scaled_X <- scale(as.matrix(X_), center = TRUE, scale = FALSE)
+    # scaled_X <- base::scale(base::as.matrix(X_), center = TRUE, scale = FALSE)
     scaled_X <- logn_scale(X_)
     if (verbose) {
       message(paste("  Using pre-normalized data with centering applied"))
@@ -798,8 +798,8 @@ sclens <- function(seurat_obj,
     message(paste("  Matrix class:", paste(class(scaled_X), collapse = ", ")))
     if (is.matrix(scaled_X)) {
       message(paste("  Value range: [", round(min(scaled_X), 4), ", ", round(max(scaled_X), 4), "]", sep = ""))
-      message(paste("  Mean value:", round(mean(scaled_X), 4)))
-      message(paste("  Standard deviation:", round(sd(as.vector(scaled_X)), 4)))
+      message(paste("  Mean value:", round(base::mean(scaled_X), 4)))
+              message(paste("  Standard deviation:", round(stats::sd(as.vector(scaled_X)), 4)))
     }
   }
   
@@ -819,7 +819,7 @@ sclens <- function(seurat_obj,
   
   # Apply same normalization logic to randomized matrix
   if (is_normalized) {
-    scaled_X_r <- scale(as.matrix(X_r), center = TRUE, scale = FALSE)
+    scaled_X_r <- base::scale(base::as.matrix(X_r), center = TRUE, scale = FALSE)
   } else {
     scaled_X_r <- logn_scale(pre_scale(X_r))
   }
@@ -844,13 +844,13 @@ sclens <- function(seurat_obj,
   if (min_s == 0) {
     warning("No signals detected!")
     # Return Seurat object with empty reductions
-    seurat_obj[[reduction_name_all]] <- CreateDimReducObject(
+    seurat_obj[[reduction_name_all]] <- Seurat::CreateDimReducObject(
       embeddings = matrix(nrow = ncol(seurat_obj), ncol = 0),
       key = paste0(toupper(substr(reduction_name_all, 1, 1)), 
                    substr(reduction_name_all, 2, nchar(reduction_name_all)), "_"),
       assay = assay
     )
-    seurat_obj[[reduction_name_filtered]] <- CreateDimReducObject(
+    seurat_obj[[reduction_name_filtered]] <- Seurat::CreateDimReducObject(
       embeddings = matrix(nrow = ncol(seurat_obj), ncol = 0),
       key = paste0(toupper(substr(reduction_name_filtered, 1, 1)), 
                    substr(reduction_name_filtered, 2, nchar(reduction_name_filtered)), "_"),
@@ -873,9 +873,9 @@ sclens <- function(seurat_obj,
   
   # Calculate noise baseline
   # Julia equivalent: nm = min(N,M); model_norm = Normal(0,sqrt(1/nm))
-  nm <- min(N, M)
-  p_tharr <- replicate(5000, max(abs(rnorm(nm, mean = 0, sd = sqrt(1/nm)))))
-  p_th <- mean(p_tharr)
+  nm <- base::min(N, M)
+  p_tharr <- base::replicate(5000, base::max(base::abs(stats::rnorm(nm, mean = 0, sd = sqrt(1/nm)))))
+  p_th <- base::mean(p_tharr)
   if (verbose) {
     message(paste("  Calculated noise threshold:", round(p_th, 6)))
     message(paste("  Matrix dimensions for baseline: min(", N, ",", M, ") =", nm))
@@ -918,7 +918,7 @@ sclens <- function(seurat_obj,
     message(paste("  Starting perturbations at:", format(perturb_start, "%H:%M:%S")))
   }
   
-  min_pc <- min(ceiling(min_s * 1.5), 50)  # Limit for computational efficiency
+  min_pc <- base::min(base::ceiling(min_s * 1.5), 50)  # Limit for computational efficiency
   
   if (n_threads > 1 && n_perturb > 1) {
     # Parallel execution
@@ -939,20 +939,20 @@ sclens <- function(seurat_obj,
       }
       
       # Sample indices for perturbation
-      n_perturb_indices <- min(length(z_idx1), round((1 - selected_sparsity) * M * N))
+      n_perturb_indices <- base::min(length(z_idx1), base::round((1 - selected_sparsity) * M * N))
       if (n_perturb_indices > 0 && length(z_idx1) > 0) {
-        sple_idx <- sample(length(z_idx1), n_perturb_indices, replace = FALSE)
+        sple_idx <- base::sample(length(z_idx1), n_perturb_indices, replace = FALSE)
         
         # Create perturbed matrix
         perturb_i <- c(X_summary$i, z_idx1[sple_idx])
         perturb_j <- c(X_summary$j, z_idx2[sple_idx])
-        perturb_x <- c(X_summary$x, rep(1, length(sple_idx)))
+        perturb_x <- c(X_summary$x, base::rep(1, length(sple_idx)))
         
         tmp_X <- Matrix::sparseMatrix(i = perturb_i, j = perturb_j, x = perturb_x, dims = c(N, M))
         
         # Get eigenvectors from perturbed matrix (apply same normalization logic)
         if (is_normalized) {
-          tmp_result <- get_eigvec(scale(as.matrix(tmp_X), center = TRUE, scale = FALSE))
+          tmp_result <- get_eigvec(base::scale(base::as.matrix(tmp_X), center = TRUE, scale = FALSE))
         } else {
           tmp_result <- get_eigvec(logn_scale(pre_scale(tmp_X)))
         }
@@ -960,7 +960,7 @@ sclens <- function(seurat_obj,
         tmp_nL <- tmp_result$eigenvalues
         
         # Store results (limit to min_pc components)
-        max_components <- min(min_pc, ncol(tmp_nV))
+        max_components <- base::min(min_pc, ncol(tmp_nV))
         return(list(
           eigenvectors = tmp_nV[, 1:max_components, drop = FALSE],
           eigenvalues = tmp_nL[1:max_components]
@@ -989,20 +989,20 @@ sclens <- function(seurat_obj,
       }
       
       # Sample indices for perturbation
-      n_perturb_indices <- min(length(z_idx1), round((1 - selected_sparsity) * M * N))
+      n_perturb_indices <- base::min(length(z_idx1), base::round((1 - selected_sparsity) * M * N))
       if (n_perturb_indices > 0 && length(z_idx1) > 0) {
-        sple_idx <- sample(length(z_idx1), n_perturb_indices, replace = FALSE)
+        sple_idx <- base::sample(length(z_idx1), n_perturb_indices, replace = FALSE)
         
         # Create perturbed matrix
         perturb_i <- c(X_summary$i, z_idx1[sple_idx])
         perturb_j <- c(X_summary$j, z_idx2[sple_idx])
-        perturb_x <- c(X_summary$x, rep(1, length(sple_idx)))
+        perturb_x <- c(X_summary$x, base::rep(1, length(sple_idx)))
         
         tmp_X <- Matrix::sparseMatrix(i = perturb_i, j = perturb_j, x = perturb_x, dims = c(N, M))
         
         # Get eigenvectors from perturbed matrix (apply same normalization logic)
         if (is_normalized) {
-          tmp_result <- get_eigvec(scale(as.matrix(tmp_X), center = TRUE, scale = FALSE))
+          tmp_result <- get_eigvec(base::scale(base::as.matrix(tmp_X), center = TRUE, scale = FALSE))
         } else {
           tmp_result <- get_eigvec(logn_scale(pre_scale(tmp_X)))
         }
@@ -1010,7 +1010,7 @@ sclens <- function(seurat_obj,
         tmp_nL <- tmp_result$eigenvalues
         
         # Store results (limit to min_pc components)
-        max_components <- min(min_pc, ncol(tmp_nV))
+        max_components <- base::min(min_pc, ncol(tmp_nV))
         nV_set[[i]] <- tmp_nV[, 1:max_components, drop = FALSE]
         nL_set[[i]] <- tmp_nL[1:max_components]
       }
@@ -1046,10 +1046,10 @@ sclens <- function(seurat_obj,
           # Calculate correlation between signal eigenvectors
           for (k in 1:min(min_s, ncol(nV_set[[i]]), ncol(nV_set[[j]]))) {
             if (k <= ncol(nV) && k <= ncol(nV_set[[i]]) && k <= ncol(nV_set[[j]])) {
-              corr_orig_i <- abs(cor(nV[,k], nV_set[[i]][,k]))
-              corr_orig_j <- abs(cor(nV[,k], nV_set[[j]][,k]))
-              corr_ij <- abs(cor(nV_set[[i]][,k], nV_set[[j]][,k]))
-              correlations[k, i, j] <- min(corr_orig_i, corr_orig_j, corr_ij)
+              corr_orig_i <- base::abs(stats::cor(nV[,k], nV_set[[i]][,k]))
+              corr_orig_j <- base::abs(stats::cor(nV[,k], nV_set[[j]][,k]))
+              corr_ij <- base::abs(stats::cor(nV_set[[i]][,k], nV_set[[j]][,k]))
+              correlations[k, i, j] <- base::min(corr_orig_i, corr_orig_j, corr_ij)
             }
           }
         }
@@ -1061,14 +1061,14 @@ sclens <- function(seurat_obj,
     for (k in 1:min_s) {
       valid_corrs <- correlations[k, , ][correlations[k, , ] > 0]
       if (length(valid_corrs) > 0) {
-        rob_scores[k] <- median(valid_corrs, na.rm = TRUE)
+        rob_scores[k] <- stats::median(valid_corrs, na.rm = TRUE)
       } else {
         rob_scores[k] <- 0
       }
     }
   } else {
     # If not enough perturbations, use all signals
-    rob_scores <- rep(th_ + 0.1, min_s)
+    rob_scores <- base::rep(th_ + 0.1, min_s)
   }
   
   # Filter signals based on robustness threshold
@@ -1124,14 +1124,14 @@ sclens <- function(seurat_obj,
   }
   
   # Add reductions to Seurat object
-  seurat_obj[[reduction_name_all]] <- CreateDimReducObject(
+  seurat_obj[[reduction_name_all]] <- Seurat::CreateDimReducObject(
     embeddings = Xout0,
     key = paste0(toupper(substr(reduction_name_all, 1, 1)), 
                  substr(reduction_name_all, 2, nchar(reduction_name_all)), "_"),
     assay = assay
   )
   
-  seurat_obj[[reduction_name_filtered]] <- CreateDimReducObject(
+  seurat_obj[[reduction_name_filtered]] <- Seurat::CreateDimReducObject(
     embeddings = Xout1,
     key = paste0(toupper(substr(reduction_name_filtered, 1, 1)), 
                  substr(reduction_name_filtered, 2, nchar(reduction_name_filtered)), "_"),
