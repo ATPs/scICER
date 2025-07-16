@@ -353,6 +353,7 @@ ggplot(eigenvalue_df, aes(x = Component, y = Eigenvalue, color = Robust)) +
   theme_minimal()
 ```
 
+
 ### Integration with Clustering
 
 ```r
@@ -385,26 +386,13 @@ p2 <- DimPlot(seurat_obj, group.by = "standard_clusters", reduction = "standard_
 print(p1 | p2)
 ```
 
-### Performance Optimization for scLENS
+### Important Notes on scLENS Usage
 
-```r
-# For large datasets, optimize parameters
-seurat_obj <- sclens(
-  large_seurat_obj,
-  n_perturb = 10,        # Reduce perturbations for speed
-  n_threads = 8,         # Use more cores
-  th = 70,               # More permissive threshold
-  verbose = TRUE
-)
+- **Input Data**: For optimal performance, we recommend using raw count data as input. Our testing shows this produces the best results.
 
-# For small datasets, increase robustness testing
-seurat_obj <- sclens(
-  small_seurat_obj,
-  n_perturb = 50,        # More perturbations for better robustness
-  th = 45,               # Stricter threshold
-  verbose = TRUE
-)
-```
+- **Batch Effect Handling**: scLENS does not inherently remove batch effects. While integration with batch correction tools may be possible, this functionality has not been thoroughly tested.
+
+- **Integration with Harmony**: While Harmony (which operates on low-dimensional embeddings like PCA) could potentially be used with scLENS for batch effect removal, this combination requires further testing and validation.
 
 ### Combining scLENS with scICER
 
