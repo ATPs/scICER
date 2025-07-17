@@ -33,6 +33,13 @@ scICER evaluates clustering consistency by:
 6. **Threshold Application**: Identifies cluster numbers meeting consistency criteria
 7. **Reproducibility Control**: Optional seed parameter for deterministic results
 
+### Performance Considerations vs [scICE Julia package](https://github.com/Mathbiomed/scICE)
+- **Speed**: R implementation typically runs slower than the native Julia version
+- **Memory**: Requires more memory for equivalent analyses
+- **Accuracy**: While highly consistent, results may differ slightly from the original scICE due to implementation differences in R vs Julia, random number generation variations, and floating-point precision handling.
+
+*Note: These tradeoffs provide better integration with the Seurat ecosystem and R workflows*
+
 ## Installation
 
 ### Prerequisites
