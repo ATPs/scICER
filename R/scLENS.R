@@ -649,6 +649,9 @@ sclens <- function(seurat_obj,
     message(paste("n_threads is greater than n_perturb, setting n_threads to", n_perturb))
     n_threads <- n_perturb
   }
+  if (n_threads > 5) {
+    message(paste("it is recommended to use n_threads <= 5. larger n_threads may cause memory issues and the speed will not be improved that much."))
+  }
   
   if (verbose) {
     start_time <- Sys.time()
