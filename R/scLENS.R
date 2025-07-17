@@ -644,6 +644,11 @@ sclens <- function(seurat_obj,
   if (!inherits(seurat_obj, "Seurat")) {
     stop("seurat_obj must be a Seurat object")
   }
+
+  if (n_threads > n_perturb) {
+    message(paste("n_threads is greater than n_perturb, setting n_threads to", n_perturb))
+    n_threads <- n_perturb
+  }
   
   if (verbose) {
     start_time <- Sys.time()
