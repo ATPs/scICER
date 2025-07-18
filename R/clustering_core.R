@@ -487,9 +487,9 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
     right_bound = numeric()
   )
   
-  n_preliminary_trials <- 10
+  n_preliminary_trials <- 15  # Increased for better precision
   beta_preliminary <- 0.01
-  n_iter_preliminary <- 3
+  n_iter_preliminary <- 5   # Increased for more stable clustering
   
   # Process cluster numbers in parallel (with Windows compatibility)
   if (.Platform$OS.type == "windows" && n_workers > 1) {
@@ -514,8 +514,11 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
     max_iterations <- 50  # Limit binary search iterations
     iteration_count <- 0
     
+    # Use tighter tolerance for better precision in distinguishing adjacent cluster numbers
+    effective_tolerance <- resolution_tolerance / 10
+    
     # Binary search for lower bound with fallback
-    while (abs(if (objective_function == "modularity") left - right else exp(left) - exp(right)) > resolution_tolerance && iteration_count < max_iterations) {
+    while (abs(if (objective_function == "modularity") left - right else exp(left) - exp(right)) > effective_tolerance && iteration_count < max_iterations) {
       iteration_count <- iteration_count + 1
       mid <- (left + right) / 2
       gamma_val <- if (objective_function == "modularity") mid else exp(mid)
@@ -548,7 +551,7 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
     right <- end_g
     iteration_count <- 0
     
-    while (abs(if (objective_function == "modularity") left - right else exp(left) - exp(right)) > resolution_tolerance && iteration_count < max_iterations) {
+    while (abs(if (objective_function == "modularity") left - right else exp(left) - exp(right)) > effective_tolerance && iteration_count < max_iterations) {
       iteration_count <- iteration_count + 1
       mid <- (left + right) / 2
       gamma_val <- if (objective_function == "modularity") mid else exp(mid)
@@ -576,18 +579,24 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
     
     right_bound <- left
     
-    # If bounds are identical or invalid, create a small range around the found value
+    # If bounds are identical or invalid, create a cluster-specific range
     if (identical(left_bound, right_bound) || is.na(left_bound) || is.na(right_bound)) {
       if (objective_function == "CPM") {
-        # For CPM, create a range around the found value
+        # For CPM, create a range around the found value with cluster-specific adjustment
         center_val <- ifelse(is.na(left_bound), exp((start_g + end_g) / 2), left_bound)
-        left_bound <- max(exp(start_g), center_val * 0.8)
-        right_bound <- min(exp(end_g), center_val * 1.2)
+        # Add cluster-specific offset to ensure different ranges for different cluster numbers
+        cluster_offset <- (target_clusters - min(cluster_range)) * 0.05  # Small offset based on cluster number
+        adjusted_center <- center_val * (1 + cluster_offset)
+        left_bound <- max(exp(start_g), adjusted_center * 0.7)
+        right_bound <- min(exp(end_g), adjusted_center * 1.3)
       } else {
-        # For modularity, create a range around the found value
+        # For modularity, create a range around the found value with cluster-specific adjustment
         center_val <- ifelse(is.na(left_bound), (start_g + end_g) / 2, left_bound)
-        left_bound <- max(start_g, center_val - 0.1)
-        right_bound <- min(end_g, center_val + 0.1)
+        # Add cluster-specific offset to ensure different ranges for different cluster numbers
+        cluster_offset <- (target_clusters - min(cluster_range)) * 0.02  # Small offset based on cluster number
+        adjusted_center <- center_val + cluster_offset
+        left_bound <- max(start_g, adjusted_center - 0.15)
+        right_bound <- min(end_g, adjusted_center + 0.15)
       }
     }
     
@@ -614,6 +623,42 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
   # Check if required columns exist
   if (!"left_bound" %in% colnames(results_dt) || !"right_bound" %in% colnames(results_dt)) {
     stop("Missing required columns in resolution range results")
+  }
+  
+  # Sort by cluster number to ensure proper ordering
+  data.table::setorder(results_dt, cluster_number)
+  
+  # Post-process to ensure non-overlapping ranges for adjacent cluster numbers
+  if (nrow(results_dt) > 1) {
+    for (i in 2:nrow(results_dt)) {
+      current_left <- results_dt$left_bound[i]
+      current_right <- results_dt$right_bound[i]
+      prev_left <- results_dt$left_bound[i-1]
+      prev_right <- results_dt$right_bound[i-1]
+      
+      # Check for overlap or identical ranges
+      if (current_left <= prev_right && abs(current_left - prev_right) < resolution_tolerance * 10) {
+        if (verbose) {
+          message(paste("RESOLUTION_SEARCH: Adjusting overlapping ranges for clusters", 
+                       results_dt$cluster_number[i-1], "and", results_dt$cluster_number[i]))
+        }
+        
+        # Calculate a small gap between ranges
+        if (objective_function == "CPM") {
+          gap <- max(resolution_tolerance * 5, (prev_right - prev_left) * 0.1)
+          # Adjust current range to be above previous range
+          range_width <- current_right - current_left
+          results_dt$left_bound[i] <- prev_right + gap
+          results_dt$right_bound[i] <- results_dt$left_bound[i] + range_width
+        } else {
+          gap <- max(resolution_tolerance * 10, (prev_right - prev_left) * 0.1)
+          # Adjust current range to be above previous range
+          range_width <- current_right - current_left
+          results_dt$left_bound[i] <- prev_right + gap
+          results_dt$right_bound[i] <- results_dt$left_bound[i] + range_width
+        }
+      }
+    }
   }
   
   # Convert to named list format - fixing the data.table syntax
