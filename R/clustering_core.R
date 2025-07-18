@@ -531,8 +531,8 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
         leiden_clustering(igraph_obj, gamma_val, objective_function, n_iter_preliminary, beta_preliminary)
       }, simplify = TRUE)
       
-      # Use apply for efficient calculation
-      n_clusters_obtained <- stats::median(apply(cluster_results, 2, max) + 1)
+      # Use apply for efficient calculation - count unique clusters instead of max + 1
+      n_clusters_obtained <- stats::median(apply(cluster_results, 2, function(x) length(unique(x))))
       
       if (n_clusters_obtained < target_clusters) {
         left <- mid
@@ -564,8 +564,8 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
         leiden_clustering(igraph_obj, gamma_val, objective_function, n_iter_preliminary, beta_preliminary)
       }, simplify = TRUE)
       
-      # Use apply for efficient calculation
-      n_clusters_obtained <- stats::median(apply(cluster_results, 2, max) + 1)
+      # Use apply for efficient calculation - count unique clusters instead of max + 1
+      n_clusters_obtained <- stats::median(apply(cluster_results, 2, function(x) length(unique(x))))
       
       if (n_clusters_obtained > target_clusters) {
         right <- mid
@@ -754,7 +754,7 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
       leiden_clustering(igraph_obj, gamma_val, objective_function, n_iterations, beta)
     }, simplify = TRUE)
     
-    mean_clusters <- stats::median(apply(cluster_matrix, 2, max) + 1)
+    mean_clusters <- stats::median(apply(cluster_matrix, 2, function(x) length(unique(x))))
     
     # Mini progress report for verbose mode
     if (verbose && length(gamma_sequence) <= 5) {  # Only for small sequences to avoid spam
