@@ -399,7 +399,21 @@ print(p1 | p2)
 
 - **Batch Effect Handling**: scLENS does not inherently remove batch effects. While integration with batch correction tools may be possible, this functionality has not been thoroughly tested.
 
-- **Integration with Harmony**: While Harmony (which operates on low-dimensional embeddings like PCA) could potentially be used with scLENS for batch effect removal, this combination requires further testing and validation.
+* **Integration with Harmony**: Combining scLENS with Harmony for batch correction is not a validated workflow. Our preliminary tests, which involved running Harmony on scLENS-generated embeddings, did not yield satisfactory results and this approach is not recommended.
+
+* **Performance and Memory Management**: The R version of scLENS is significantly slower and uses more memory than the Julia version. Additionally, R may not fully release memory after the analysis completes.
+
+    * **To reduce memory usage and increase speed**: Consider reducing `n_perturb` to 10 and using fewer `n_threads`.
+    * **To manage memory**: We recommend saving your results, restarting the R session, and then reloading your data.
+      ```r
+      # Save the Seurat object
+      qs::qsave(seurat_obj, "your_seurat_object.qs")
+
+      # --> Restart your R session here <--
+
+      # Load the data to continue your work
+      seurat_obj <- qs::qread("your_seurat_object.qs")
+      ```
 
 ### Combining scLENS with scICER
 
