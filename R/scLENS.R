@@ -3,6 +3,8 @@
 #' @import parallel
 #' @import foreach
 #' @import doParallel
+#' @importFrom future.apply future_lapply
+#' @importFrom future plan multisession sequential
 #' @importFrom stats sd median mad quantile rnorm cor
 #' @importFrom utils setTxtProgressBar txtProgressBar
 #' @importFrom methods as
@@ -108,24 +110,56 @@ scaled_gdata <- function(X, position_ = "mean") {
   # We implement mean centering here as it's the most common
   
   if (position_ == "mean") {
-    # Calculate means and standard deviations by column
-    col_means <- colMeans(X)
-    col_sds <- apply(X, 2, sd)
-    col_sds[col_sds == 0] <- 1  # Avoid division by zero
-    
-    # Center and scale
-    X_centered <- sweep(X, 2, col_means, "-")
-    X_scaled <- sweep(X_centered, 2, col_sds, "/")
+    # Use Matrix-aware operations for sparse matrices
+    if (inherits(X, "sparseMatrix")) {
+      # Keep sparse throughout the computation
+      col_means <- Matrix::colMeans(X)
+      # Calculate column standard deviations using sparse operations
+      col_vars <- Matrix::colMeans(X^2) - col_means^2
+      col_sds <- sqrt(pmax(col_vars, 0))  # Ensure non-negative
+      col_sds[col_sds == 0] <- 1  # Avoid division by zero
+      
+      # Center and scale using sparse operations
+      X_centered <- sweep(X, 2, col_means, "-")
+      X_scaled <- sweep(X_centered, 2, col_sds, "/")
+    } else {
+      # For dense matrices, use matrixStats for speed
+      if (!requireNamespace("matrixStats", quietly = TRUE)) {
+        # Fallback to base R if matrixStats not available
+        col_means <- colMeans(X)
+        col_sds <- apply(X, 2, sd)
+      } else {
+        col_means <- matrixStats::colMeans2(X)
+        col_sds <- matrixStats::colSds(X)
+      }
+      col_sds[col_sds == 0] <- 1  # Avoid division by zero
+      
+      # Center and scale
+      X_centered <- sweep(X, 2, col_means, "-")
+      X_scaled <- sweep(X_centered, 2, col_sds, "/")
+    }
     
     return(X_scaled)
   } else if (position_ == "median") {
-    # Calculate medians and MADs by column
-    col_medians <- apply(X, 2, median)
-    col_mads <- apply(X, 2, mad)
+    # For median centering, we need to densify for matrixStats functions
+    if (inherits(X, "sparseMatrix")) {
+      X_dense <- as.matrix(X)
+    } else {
+      X_dense <- X
+    }
+    
+    # Use matrixStats if available, otherwise fall back to apply
+    if (!requireNamespace("matrixStats", quietly = TRUE)) {
+      col_medians <- apply(X_dense, 2, median)
+      col_mads <- apply(X_dense, 2, mad)
+    } else {
+      col_medians <- matrixStats::colMedians(X_dense)
+      col_mads <- matrixStats::colMads(X_dense)
+    }
     col_mads[col_mads == 0] <- 1  # Avoid division by zero
     
     # Center and scale
-    X_centered <- sweep(X, 2, col_medians, "-")
+    X_centered <- sweep(X_dense, 2, col_medians, "-")
     X_scaled <- sweep(X_centered, 2, col_mads, "/")
     
     return(X_scaled)
@@ -685,32 +719,24 @@ sclens <- function(seurat_obj,
     message("PARALLEL PROCESSING SETUP:")
     message(paste("  Detected cores:", parallel::detectCores()))
     message(paste("  Requested threads:", n_threads))
-    message(paste("  Already registered:", foreach::getDoParRegistered()))
   }
   
+  # Configure future backend for better memory efficiency
+  old_plan <- future::plan()  # Save current plan to restore later
+  on.exit(future::plan(old_plan), add = TRUE)  # Restore plan on exit
+  
   if (n_threads > 1) {
-    if (!foreach::getDoParRegistered()) {
-      actual_threads <- min(n_threads, parallel::detectCores() - 1)
-      if (verbose) {
-        message(paste("  Creating cluster with", actual_threads, "workers"))
-        message(paste("  Thread setup: Creating parallel cluster"))
-        message(paste("  Backend: doParallel with", actual_threads, "cores"))
-      }
-      cl <- parallel::makeCluster(actual_threads)
-      doParallel::registerDoParallel(cl)
-      on.exit(parallel::stopCluster(cl))
-      if (verbose) {
-        message("  Parallel cluster created successfully")
-      }
-    } else {
-      if (verbose) {
-        message("  Using existing parallel backend")
-      }
+    actual_threads <- min(n_threads, parallel::detectCores() - 1)
+    if (verbose) {
+      message(paste("  Using future backend with", actual_threads, "workers"))
+      message(paste("  Backend: future multisession (memory efficient)"))
     }
+    future::plan(future::multisession, workers = actual_threads)
   } else {
     if (verbose) {
       message("  Running in sequential mode (n_threads = 1)")
     }
+    future::plan(future::sequential)
   }
   
   # Extract sparse matrix from Seurat object
@@ -722,7 +748,11 @@ sclens <- function(seurat_obj,
     message(paste("  Starting data extraction at:", format(extraction_start, "%H:%M:%S")))
   }
   
+  # Free memory before large matrix operation
+  gc(verbose = FALSE)
   X_ <- seurat_to_sparse(seurat_obj, assay = assay, slot = slot)
+  # Clean up after matrix conversion
+  gc(verbose = FALSE)
   
   if (verbose) {
     extraction_end <- Sys.time()
@@ -790,6 +820,9 @@ sclens <- function(seurat_obj,
     }
   }
   
+  # Free memory before preprocessing
+  gc(verbose = FALSE)
+  
   if (is_normalized) {
     # Use pre-normalized data but ensure it's centered for RMT analysis
     # This preserves existing normalization while making data suitable for covariance matrix calculations
@@ -801,7 +834,11 @@ sclens <- function(seurat_obj,
     }
   } else {
     # Apply scLENS normalization pipeline
-    scaled_X <- logn_scale(pre_scale(X_))
+    pre_scaled <- pre_scale(X_)
+    gc(verbose = FALSE)  # Clean up after pre_scale
+    scaled_X <- logn_scale(pre_scaled)
+    rm(pre_scaled)  # Remove intermediate result
+    gc(verbose = FALSE)  # Clean up after logn_scale
   }
   
   if (verbose) {
@@ -819,7 +856,9 @@ sclens <- function(seurat_obj,
   
   # Generate randomized matrix for null model
   # Julia equivalent: X_r = df2sparr(random_nz(inp_df,rmix=true))
+  gc(verbose = FALSE)  # Free memory before randomization
   X_r <- random_nz(X_, rmix = TRUE)
+  gc(verbose = FALSE)  # Clean up after randomization
   
   # Extract signals using Random Matrix Theory
   # Julia equivalent: nL, nV, L, L_mp, lambda_c, _, noiseV = get_sigev(scaled_X,logn_scale(pre_scale(X_r)),device=device_)
@@ -835,10 +874,18 @@ sclens <- function(seurat_obj,
   if (is_normalized) {
     scaled_X_r <- scale(as.matrix(X_r), center = TRUE, scale = FALSE)
   } else {
-    scaled_X_r <- logn_scale(pre_scale(X_r))
+    pre_scaled_r <- pre_scale(X_r)
+    gc(verbose = FALSE)  # Clean up after pre_scale
+    scaled_X_r <- logn_scale(pre_scaled_r)
+    rm(pre_scaled_r)  # Remove intermediate result
+    gc(verbose = FALSE)  # Clean up after logn_scale
   }
+  rm(X_r)  # Remove original randomized matrix
+  gc(verbose = FALSE)  # Final cleanup before RMT analysis
   
   rmt_result <- get_sigev(scaled_X, scaled_X_r)
+  rm(scaled_X_r)  # Remove randomized scaled matrix
+  gc(verbose = FALSE)  # Clean up after RMT analysis
   
   if (verbose) {
     rmt_end <- Sys.time()
@@ -921,6 +968,61 @@ sclens <- function(seurat_obj,
   selected_sparsity <- 0.995
   if (verbose) cat("Selected perturbation sparsity:", selected_sparsity, "\n")
   
+  # Define perturbation helper function
+  perform_single_perturbation <- function(i) {
+    # Sample indices for perturbation
+    n_perturb_indices <- min(length(z_idx1), round((1 - selected_sparsity) * M * N))
+    if (n_perturb_indices > 0 && length(z_idx1) > 0) {
+      sple_idx <- sample(length(z_idx1), n_perturb_indices, replace = FALSE)
+      
+      # Create perturbed matrix
+      perturb_i <- c(X_summary$i, z_idx1[sple_idx])
+      perturb_j <- c(X_summary$j, z_idx2[sple_idx])
+      perturb_x <- c(X_summary$x, rep(1, length(sple_idx)))
+      
+      tmp_X <- Matrix::sparseMatrix(i = perturb_i, j = perturb_j, x = perturb_x, dims = c(N, M))
+      
+      # Get eigenvectors from perturbed matrix (apply same normalization logic)
+      if (is_normalized) {
+        tmp_result <- get_eigvec(scale(as.matrix(tmp_X), center = TRUE, scale = FALSE))
+      } else {
+        # Use cached normalization and clean up as we go
+        pre_scaled_tmp <- pre_scale(tmp_X)
+        rm(tmp_X)
+        gc(verbose = FALSE)
+        
+        normalized_tmp <- logn_scale(pre_scaled_tmp)
+        rm(pre_scaled_tmp)
+        gc(verbose = FALSE)
+        
+        tmp_result <- get_eigvec(normalized_tmp)
+        rm(normalized_tmp)
+        gc(verbose = FALSE)
+      }
+      
+      # Extract needed components and clean up
+      tmp_nV <- tmp_result$eigenvectors
+      tmp_nL <- tmp_result$eigenvalues
+      rm(tmp_result)
+      gc(verbose = FALSE)
+      
+      # Store results (limit to min_pc components)
+      max_components <- min(min_pc, ncol(tmp_nV))
+      result <- list(
+        eigenvectors = tmp_nV[, 1:max_components, drop = FALSE],
+        eigenvalues = tmp_nL[1:max_components]
+      )
+      
+      # Final cleanup
+      rm(tmp_nV, tmp_nL)
+      gc(verbose = FALSE)
+      
+      return(result)
+    } else {
+      return(NULL)
+    }
+  }
+
   # Perform perturbations
   # Julia equivalent: @showprogress "perturbing..." for _ in 1:n_perturb
   if (verbose) {
@@ -932,61 +1034,30 @@ sclens <- function(seurat_obj,
     message(paste("  Starting perturbations at:", format(perturb_start, "%H:%M:%S")))
   }
   
+  # Clean up before perturbations
+  gc(verbose = FALSE)
+  
   min_pc <- min(ceiling(min_s * 1.5), 50)  # Limit for computational efficiency
   
   if (n_threads > 1 && n_perturb > 1) {
-    # Parallel execution
+    # Parallel execution using future for better memory efficiency
     if (verbose) {
       message(paste("  Running perturbations in parallel with", n_threads, "threads"))
+      message(paste("  Using future backend (no environment copying)"))
     }
     
-    perturbation_results <- foreach(i = 1:n_perturb, .combine = list, .multicombine = TRUE,
-                                             .export = c("get_eigvec", "logn_scale", "pre_scale", "proj_l", 
-                                                        "zscore_with_l2", "scaled_gdata", "wishart_matrix", 
-                                                        "get_eigen", "mp_parameters", "mp_calculation", 
-                                                        "tw_calculation", "get_sigev", "random_nz",
-                                                        "X_summary", "z_idx1", "z_idx2", "selected_sparsity", 
-                                                        "M", "N", "min_pc", "verbose", "n_perturb"),
-                                             .packages = c("Matrix", "Seurat")) %dopar% {
-      if (verbose && i %% max(1, floor(n_perturb/10)) == 0) {
-        cat("Perturbation", i, "of", n_perturb, "(Thread", Sys.getpid(), ")\n")
-      }
-      
-      # Sample indices for perturbation
-      n_perturb_indices <- min(length(z_idx1), round((1 - selected_sparsity) * M * N))
-      if (n_perturb_indices > 0 && length(z_idx1) > 0) {
-        sple_idx <- sample(length(z_idx1), n_perturb_indices, replace = FALSE)
-        
-        # Create perturbed matrix
-        perturb_i <- c(X_summary$i, z_idx1[sple_idx])
-        perturb_j <- c(X_summary$j, z_idx2[sple_idx])
-        perturb_x <- c(X_summary$x, rep(1, length(sple_idx)))
-        
-        tmp_X <- Matrix::sparseMatrix(i = perturb_i, j = perturb_j, x = perturb_x, dims = c(N, M))
-        
-        # Get eigenvectors from perturbed matrix (apply same normalization logic)
-        if (is_normalized) {
-          tmp_result <- get_eigvec(scale(as.matrix(tmp_X), center = TRUE, scale = FALSE))
-        } else {
-          tmp_result <- get_eigvec(logn_scale(pre_scale(tmp_X)))
-        }
-        tmp_nV <- tmp_result$eigenvectors
-        tmp_nL <- tmp_result$eigenvalues
-        
-        # Store results (limit to min_pc components)
-        max_components <- min(min_pc, ncol(tmp_nV))
-        return(list(
-          eigenvectors = tmp_nV[, 1:max_components, drop = FALSE],
-          eigenvalues = tmp_nL[1:max_components]
-        ))
-      } else {
-        return(NULL)
-      }
-    }
+    # Use future_lapply for memory-efficient parallelization
+    perturbation_results <- future.apply::future_lapply(
+      1:n_perturb, 
+      perform_single_perturbation,
+      future.seed = TRUE  # Ensure reproducible random numbers
+    )
     
     # Extract results
     nV_set <- lapply(perturbation_results, function(x) if(!is.null(x)) x$eigenvectors else NULL)
     nL_set <- lapply(perturbation_results, function(x) if(!is.null(x)) x$eigenvalues else NULL)
+    rm(perturbation_results)  # Remove large intermediate results
+    gc(verbose = FALSE)  # Clean up after parallel perturbations
     
   } else {
     # Sequential execution
@@ -1040,6 +1111,7 @@ sclens <- function(seurat_obj,
   
   # Calculate robustness scores
   # Julia equivalent: th_ = cos(deg2rad(th))
+  gc(verbose = FALSE)  # Clean up before robustness calculation
   th_ <- cos(th * pi / 180)
   if (verbose) {
     message(paste("  Calculating robustness scores..."))
@@ -1111,6 +1183,9 @@ sclens <- function(seurat_obj,
     message(paste("  Robust signals after testing:", length(sig_id)))
   }
   
+  # Clean up before reconstruction
+  gc(verbose = FALSE)
+  
   # All signals (after RMT filtering)
   if (length(nL) > 0) {
     Xout0 <- nV %*% diag(sqrt(nL))
@@ -1140,6 +1215,9 @@ sclens <- function(seurat_obj,
     colnames(Xout1) <- paste0(reduction_name_filtered, "_", 1:ncol(Xout1))
   }
   
+  # Clean up before creating reduction objects
+  gc(verbose = FALSE)
+  
   # Add reductions to Seurat object
   seurat_obj[[reduction_name_all]] <- CreateDimReducObject(
     embeddings = Xout0,
@@ -1148,6 +1226,10 @@ sclens <- function(seurat_obj,
     assay = assay
   )
   
+  # Clean up intermediate results
+  rm(Xout0)
+  gc(verbose = FALSE)
+  
   seurat_obj[[reduction_name_filtered]] <- CreateDimReducObject(
     embeddings = Xout1,
     key = paste0(toupper(substr(reduction_name_filtered, 1, 1)), 
@@ -1155,7 +1237,14 @@ sclens <- function(seurat_obj,
     assay = assay
   )
   
+  # Clean up remaining intermediate results
+  rm(Xout1)
+  gc(verbose = FALSE)
+  
   # Store additional metadata
+  # Clean up before storing metadata
+  gc(verbose = FALSE)
+  
   seurat_obj@misc$sclens_results <- list(
     signal_eigenvalues = nL,
     all_eigenvalues = L,
@@ -1166,6 +1255,10 @@ sclens <- function(seurat_obj,
     n_signals_total = length(nL),
     n_signals_robust = length(sig_id)
   )
+  
+  # Clean up metadata variables
+  rm(nL, L, L_mp, rob_scores, sig_id)
+  gc(verbose = FALSE)
   
   if (verbose) {
     reconstruction_end <- Sys.time()
