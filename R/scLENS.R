@@ -21,6 +21,8 @@
 #' @param assay Which assay to use (default: "RNA")
 #' @param slot Which slot to use (default: "counts")
 #' @return Sparse matrix (genes x cells)
+options("future.globals.maxSize" = Inf)
+
 seurat_to_sparse <- function(seurat_obj, assay = "RNA", slot = "counts") {
   # Get the count matrix from Seurat object
   # Note: Seurat stores as genes x cells, Julia used cells x genes
