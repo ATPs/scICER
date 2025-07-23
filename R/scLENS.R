@@ -8,6 +8,7 @@
 #' @importFrom stats sd median mad quantile rnorm cor
 #' @importFrom utils setTxtProgressBar txtProgressBar
 #' @importFrom methods as
+#' @importFrom RSpectra eigs_sym
 #'
 #' scLENS R Implementation
 #' Converted from Julia implementation for single-cell RNA-seq data analysis
@@ -244,19 +245,53 @@ wishart_matrix <- function(X) {
 #' Julia equivalent: _get_eigen(Y;device="cpu")
 #' 
 #' @param Y Symmetric matrix
+#' @param k Number of eigenvalues/vectors to compute (optional)
 #' @return List with eigenvalues and eigenvectors
-get_eigen <- function(Y) {
-  # Original Julia code:
-  # tmp_L, tmp_V = eigen(Y)
-  # return tmp_L, tmp_V
+get_eigen <- function(Y, k = NULL) {
+  # If k is not specified, estimate reasonable number based on matrix size
+  if (is.null(k)) {
+    # For RMT analysis, we typically don't need all eigenvalues
+    # A reasonable default could be min(n/10, 100) where n is matrix dimension
+    k <- max(ceiling(nrow(Y)/10), 100)
+  }
   
-  # Compute eigendecomposition
-  eigen_result <- eigen(Y, symmetric = TRUE)
+  # Try using RSpectra for large matrices if available
+  if (!requireNamespace("RSpectra", quietly = TRUE)) {
+    # Fallback to base R if RSpectra not available
+    warning("RSpectra package not available, falling back to base R eigen(). Install RSpectra for better performance with large matrices.")
+    eigen_result <- eigen(Y, symmetric = TRUE)
+    return(list(
+      values = eigen_result$values,
+      vectors = eigen_result$vectors
+    ))
+  }
   
-  return(list(
-    values = eigen_result$values,
-    vectors = eigen_result$vectors
-  ))
+  # Use RSpectra for large matrices
+  if (nrow(Y) > 1000) {
+    tryCatch({
+      # eigs_sym is specifically for symmetric matrices
+      eigen_result <- RSpectra::eigs_sym(Y, k = k, which = "LM")
+      return(list(
+        values = eigen_result$values,
+        vectors = eigen_result$vectors
+      ))
+    }, error = function(e) {
+      warning("RSpectra eigs_sym failed, falling back to base R eigen(): ", e$message)
+      # Fallback to base R if RSpectra fails
+      eigen_result <- eigen(Y, symmetric = TRUE)
+      return(list(
+        values = eigen_result$values,
+        vectors = eigen_result$vectors
+      ))
+    })
+  } else {
+    # For small matrices, base R eigen is fine
+    eigen_result <- eigen(Y, symmetric = TRUE)
+    return(list(
+      values = eigen_result$values,
+      vectors = eigen_result$vectors
+    ))
+  }
 }
 
 #' Helper function: Marchenko-Pastur parameters
