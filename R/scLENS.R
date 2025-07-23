@@ -1227,7 +1227,6 @@ sclens <- function(seurat_obj,
   )
   
   # Clean up intermediate results
-  rm(Xout0)
   gc(verbose = FALSE)
   
   seurat_obj[[reduction_name_filtered]] <- CreateDimReducObject(
@@ -1238,7 +1237,6 @@ sclens <- function(seurat_obj,
   )
   
   # Clean up remaining intermediate results
-  rm(Xout1)
   gc(verbose = FALSE)
   
   # Store additional metadata
@@ -1257,7 +1255,6 @@ sclens <- function(seurat_obj,
   )
   
   # Clean up metadata variables
-  rm(nL, L, L_mp, rob_scores, sig_id)
   gc(verbose = FALSE)
   
   if (verbose) {
