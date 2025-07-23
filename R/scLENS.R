@@ -254,7 +254,7 @@ get_eigen <- function(Y, k = NULL) {
   if (is.null(k)) {
     # For RMT analysis, we typically don't need all eigenvalues
     # A reasonable default could be min(n/10, 100) where n is matrix dimension
-    k <- max(ceiling(nrow(Y)/10), 100)
+    k <- min(ceiling(nrow(Y)/10), 100)
   }
   
   # Try using RSpectra for large matrices if available
