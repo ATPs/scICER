@@ -5,6 +5,63 @@
 #' @importFrom data.table data.table rbindlist
 NULL
 
+# Global clustering cache environment for optimization
+clustering_cache_env <- new.env(parent = emptyenv())
+
+#' Cached version of leiden clustering to avoid redundant computations
+#' @param igraph_obj igraph object to cluster
+#' @param resolution Resolution parameter for clustering
+#' @param objective_function Objective function ("modularity" or "CPM")
+#' @param n_iterations Number of iterations
+#' @param beta Beta parameter
+#' @param initial_membership Initial cluster membership (optional)
+#' @param use_cache Whether to use caching (default: TRUE)
+#' @param cache_key_suffix Additional suffix for cache key (default: "")
+#' @return Vector of cluster assignments (0-based)
+#' @keywords internal
+cached_leiden_clustering <- function(igraph_obj, resolution, objective_function, 
+                                   n_iterations, beta, initial_membership = NULL,
+                                   use_cache = TRUE, cache_key_suffix = "") {
+  
+  if (!use_cache) {
+    return(leiden_clustering(igraph_obj, resolution, objective_function, n_iterations, beta, initial_membership))
+  }
+  
+  # Create cache key based on parameters (excluding initial_membership for broader reuse)
+  cache_key <- paste(
+    "r", round(resolution, 8),
+    "obj", objective_function, 
+    "iter", n_iterations,
+    "beta", round(beta, 4),
+    "suffix", cache_key_suffix,
+    sep = "_"
+  )
+  
+  # Check if result exists in cache
+  if (exists(cache_key, envir = clustering_cache_env)) {
+    return(clustering_cache_env[[cache_key]])
+  }
+  
+  # Compute result and cache it
+  result <- leiden_clustering(igraph_obj, resolution, objective_function, n_iterations, beta, initial_membership)
+  clustering_cache_env[[cache_key]] <- result
+  
+  return(result)
+}
+
+#' Clear the global clustering cache
+#' @keywords internal
+clear_clustering_cache <- function() {
+  rm(list = ls(envir = clustering_cache_env), envir = clustering_cache_env)
+}
+
+#' Get cache statistics
+#' @keywords internal  
+get_cache_stats <- function() {
+  cache_size <- length(ls(envir = clustering_cache_env))
+  return(list(cache_entries = cache_size))
+}
+
 #' Cross-platform parallel lapply wrapper
 #' @param X Vector/list to iterate over
 #' @param FUN Function to apply
@@ -144,7 +201,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
     
     if (verbose && in_parallel_context) {
       message(paste("CLUSTERING_MAIN: Nested worker optimization - using", nested_workers, 
-                   "workers per cluster (", actual_workers, "total /", length(cluster_range), "clusters)"))
+                   "workers per cluster ( ", actual_workers, "total /", length(cluster_range), "clusters)"))
     }
             ic_scores <- cross_platform_mclapply(gamma_test, function(gamma_val) {
       # Set deterministic seed for filtering if base seed provided
@@ -505,7 +562,7 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
   
   if (verbose && in_parallel_context) {
     message(paste("RESOLUTION_SEARCH: Nested worker optimization - using", nested_workers, 
-                 "workers per cluster (", n_workers, "total /", length(cluster_range), "clusters)"))
+                 "workers per cluster ( ", n_workers, "total /", length(cluster_range), "clusters)"))
   }
   
   range_results <- cross_platform_mclapply(cluster_range, function(target_clusters) {
@@ -531,7 +588,8 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
       }
       
       cluster_results <- replicate(n_preliminary_trials, {
-        leiden_clustering(igraph_obj, gamma_val, objective_function, n_iter_preliminary, beta_preliminary)
+        cached_leiden_clustering(igraph_obj, gamma_val, objective_function, n_iter_preliminary, beta_preliminary,
+                               cache_key_suffix = paste("res_search_lower", target_clusters, sep = "_"))
       }, simplify = TRUE)
       
       # Use apply for efficient calculation - count unique clusters instead of max + 1
@@ -564,7 +622,8 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
       }
       
       cluster_results <- replicate(n_preliminary_trials, {
-        leiden_clustering(igraph_obj, gamma_val, objective_function, n_iter_preliminary, beta_preliminary)
+        cached_leiden_clustering(igraph_obj, gamma_val, objective_function, n_iter_preliminary, beta_preliminary,
+                               cache_key_suffix = paste("res_search_upper", target_clusters, sep = "_"))
       }, simplify = TRUE)
       
       # Use apply for efficient calculation - count unique clusters instead of max + 1
@@ -670,42 +729,6 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
   return(gamma_dict)
 }
 
-#' Filter out cluster numbers that produce inconsistent results
-#' @keywords internal
-filter_problematic_clusters <- function(gamma_dict, cluster_range, igraph_obj,
-                                       objective_function, remove_threshold, n_workers, verbose) {
-  
-  excluded_numbers <- c()
-  
-  for (cluster_num in cluster_range) {
-    if (!(as.character(cluster_num) %in% names(gamma_dict))) {
-      excluded_numbers <- c(excluded_numbers, cluster_num)
-      next
-    }
-    
-    gamma_range <- gamma_dict[[as.character(cluster_num)]]
-    
-    # Test multiple gammas in the range
-    gamma_test <- seq(gamma_range[1], gamma_range[2], length.out = min(5, abs(diff(gamma_range)) * 100 + 1))
-    
-    ic_scores <- sapply(gamma_test, function(gamma_val) {
-      cluster_results <- replicate(10, {
-        leiden_clustering(igraph_obj, gamma_val, objective_function, 5, 0.01)
-      }, simplify = TRUE)
-      
-      extracted_results <- extract_clustering_array(cluster_results)
-      ic_result <- calculate_ic_from_extracted(extracted_results)
-      return(1 / ic_result)  # Convert to inconsistency score
-    })
-    
-    if (min(ic_scores, na.rm = TRUE) >= remove_threshold) {
-      excluded_numbers <- c(excluded_numbers, cluster_num)
-    }
-  }
-  
-  return(excluded_numbers)
-}
-
 #' Optimize clustering within a resolution range
 #' @keywords internal
 optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, objective_function,
@@ -785,7 +808,7 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
   
   if (verbose && in_parallel_context) {
     message(paste(worker_id, ": Nested worker optimization - using", nested_workers, 
-                 "workers per gamma (", n_workers, "total /", length(gamma_sequence), "gammas)"))
+                 "workers per gamma ( ", n_workers, "total /", length(gamma_sequence), "gammas)"))
   }
   
   clustering_results <- cross_platform_mclapply(gamma_sequence, function(gamma_val) {
