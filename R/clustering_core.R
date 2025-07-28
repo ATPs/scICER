@@ -101,6 +101,13 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
                           objective_function, remove_threshold, resolution_tolerance, verbose, 
                           in_parallel_context = FALSE) {
   
+  # Clear clustering cache at start for fresh run
+  if (verbose) {
+    cache_stats_before <- get_cache_stats()
+    message(paste("CLUSTERING_MAIN: Cache entries before clearing:", cache_stats_before$cache_entries))
+  }
+  clear_clustering_cache()
+  
   # Set random seed if provided for reproducibility
   if (!is.null(seed)) {
     set.seed(seed)
@@ -211,7 +218,8 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
       }
       
       cluster_results <- replicate(10, {
-        leiden_clustering(igraph_obj, gamma_val, objective_function, 5, 0.01)
+        cached_leiden_clustering(igraph_obj, gamma_val, objective_function, 5, 0.01,
+                               cache_key_suffix = paste("filter", cluster_num, sep = "_"))
       }, simplify = TRUE)
       
       extracted_results <- extract_clustering_array(cluster_results)
@@ -513,6 +521,13 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   # Sort by cluster number (only if the column exists and there are rows)
   if (nrow(results_dt) > 0 && "cluster_number" %in% colnames(results_dt)) {
     data.table::setorder(results_dt, cluster_number)
+  }
+  
+  # Report cache statistics for performance monitoring
+  if (verbose) {
+    cache_stats_final <- get_cache_stats()
+    message(paste("CLUSTERING_MAIN: Final cache entries:", cache_stats_final$cache_entries))
+    message(paste("CLUSTERING_MAIN: Cache provided", cache_stats_final$cache_entries, "reused clustering results"))
   }
   
   # Convert back to list format for compatibility - with defensive programming

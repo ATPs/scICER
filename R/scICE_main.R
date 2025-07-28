@@ -82,6 +82,11 @@ scICE_clustering <- function(object,
                             resolution_tolerance = 1e-8,
                             verbose = TRUE) {
   
+  # Clear clustering cache at start of new scICE run for optimal performance
+  if (exists("clear_clustering_cache") && is.function(clear_clustering_cache)) {
+    clear_clustering_cache()
+  }
+  
   # Validate inputs
   if (!inherits(object, "Seurat")) {
     stop("object must be a Seurat object")
