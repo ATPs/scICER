@@ -6,8 +6,8 @@ NULL
 #'
 #' @description
 #' ECS calculates similarity between two clustering results based on how consistently 
-#' each individual cell is grouped with other cells. This is more efficient than 
-#' traditional methods that build consensus matrices.
+#' each individual cell is grouped with other cells. This function now uses the 
+#' optimized ClustAssess implementation for significantly better performance.
 #'
 #' @param cluster_a First clustering result (vector of cluster assignments)
 #' @param cluster_b Second clustering result (vector of cluster assignments)
@@ -17,66 +17,79 @@ NULL
 #' @return Either mean ECS score (if return_vector=FALSE) or vector of ECS scores for each cell
 #' @export
 calculate_ecs <- function(cluster_a, cluster_b, d = 0.9, return_vector = FALSE) {
-  # Convert to 0-based indexing for consistency with Julia code
-  cluster_a <- as.integer(cluster_a) - 1L
-  cluster_b <- as.integer(cluster_b) - 1L
-  
-  n <- length(cluster_a)
-  unique_a <- unique(cluster_a)
-  unique_b <- unique(cluster_b)
-  
-  # Create index groups for each cluster
-  groups_a <- lapply(unique_a, function(x) which(cluster_a == x))
-  groups_b <- lapply(unique_b, function(x) which(cluster_b == x))
-  
-  # Calculate cluster sizes and damping factors
-  cluster_sizes_a <- d / sapply(groups_a, length)
-  cluster_sizes_b <- d / sapply(groups_b, length)
-  
-  # Initialize matrices for memoization
-  unique_ecs_vals <- matrix(NaN, nrow = length(unique_a), ncol = length(unique_b))
-  ecs_scores <- numeric(n)
-  
-  # Calculate ECS scores - matching Julia's simmat_v2 behavior
-  for (i in 1:n) {
-    pos_a <- which(unique_a == cluster_a[i])
-    pos_b <- which(unique_b == cluster_b[i])
-    
-    if (is.nan(unique_ecs_vals[pos_a, pos_b])) {
-      # Get all neighbors
-      neighbors_a <- groups_a[[pos_a]]
-      neighbors_b <- groups_b[[pos_b]]
-      all_neighbors <- unique(c(neighbors_a, neighbors_b))
-      
-      # Initialize PageRank vectors (matching Julia's approach)
-      ppr1 <- numeric(n)
-      ppr2 <- numeric(n)
-      
-      # Set cluster members to cluster size (Julia's approach)
-      ppr1[neighbors_a] <- cluster_sizes_a[pos_a]
-      ppr2[neighbors_b] <- cluster_sizes_b[pos_b]
-      
-      # Set current node to base score + cluster size (Julia's approach)
-      ppr1[i] <- 1.0 - d + cluster_sizes_a[pos_a]
-      ppr2[i] <- 1.0 - d + cluster_sizes_b[pos_b]
-      
-      # Calculate L1 distance
-      l1_distance <- sum(abs(ppr2[all_neighbors] - ppr1[all_neighbors]))
-      
-      ecs_scores[i] <- l1_distance
-      unique_ecs_vals[pos_a, pos_b] <- l1_distance
+  # Check if ClustAssess is available, if not fall back to our implementation
+  if (requireNamespace("ClustAssess", quietly = TRUE)) {
+    # Use ClustAssess functions for much better performance
+    if (return_vector) {
+      return(ClustAssess::element_sim_elscore(cluster_a, cluster_b, alpha = d))
     } else {
-      ecs_scores[i] <- unique_ecs_vals[pos_a, pos_b]
+      return(ClustAssess::element_sim(cluster_a, cluster_b, alpha = d))
     }
-  }
-  
-  # Convert to similarity scores
-  similarity_scores <- 1 - (1 / (2 * d)) * ecs_scores
-  
-  if (return_vector) {
-    return(similarity_scores)
   } else {
-    return(mean(similarity_scores))
+    # Fall back to our Julia-like implementation if ClustAssess is not available
+    warning("ClustAssess package not found. Using fallback implementation. For better performance, install ClustAssess: install.packages('ClustAssess')")
+    
+    # Convert to 0-based indexing for consistency with Julia code
+    cluster_a <- as.integer(cluster_a) - 1L
+    cluster_b <- as.integer(cluster_b) - 1L
+    
+    n <- length(cluster_a)
+    unique_a <- unique(cluster_a)
+    unique_b <- unique(cluster_b)
+    
+    # Create index groups for each cluster
+    groups_a <- lapply(unique_a, function(x) which(cluster_a == x))
+    groups_b <- lapply(unique_b, function(x) which(cluster_b == x))
+    
+    # Calculate cluster sizes and damping factors
+    cluster_sizes_a <- d / sapply(groups_a, length)
+    cluster_sizes_b <- d / sapply(groups_b, length)
+    
+    # Initialize matrices for memoization
+    unique_ecs_vals <- matrix(NaN, nrow = length(unique_a), ncol = length(unique_b))
+    ecs_scores <- numeric(n)
+    
+    # Calculate ECS scores - matching Julia's simmat_v2 behavior
+    for (i in 1:n) {
+      pos_a <- which(unique_a == cluster_a[i])
+      pos_b <- which(unique_b == cluster_b[i])
+      
+      if (is.nan(unique_ecs_vals[pos_a, pos_b])) {
+        # Get all neighbors
+        neighbors_a <- groups_a[[pos_a]]
+        neighbors_b <- groups_b[[pos_b]]
+        all_neighbors <- unique(c(neighbors_a, neighbors_b))
+        
+        # Initialize PageRank vectors (matching Julia's approach)
+        ppr1 <- numeric(n)
+        ppr2 <- numeric(n)
+        
+        # Set cluster members to cluster size (Julia's approach)
+        ppr1[neighbors_a] <- cluster_sizes_a[pos_a]
+        ppr2[neighbors_b] <- cluster_sizes_b[pos_b]
+        
+        # Set current node to base score + cluster size (Julia's approach)
+        ppr1[i] <- 1.0 - d + cluster_sizes_a[pos_a]
+        ppr2[i] <- 1.0 - d + cluster_sizes_b[pos_b]
+        
+        # Calculate L1 distance
+        l1_distance <- sum(abs(ppr2[all_neighbors] - ppr1[all_neighbors]))
+        
+        ecs_scores[i] <- l1_distance
+        unique_ecs_vals[pos_a, pos_b] <- l1_distance
+      } else {
+        ecs_scores[i] <- unique_ecs_vals[pos_a, pos_b]
+      }
+    }
+    
+    # Convert to similarity scores
+    similarity_scores <- 1 - (1 / (2 * d)) * ecs_scores
+    
+    if (return_vector) {
+      return(similarity_scores)
+    } else {
+      return(mean(similarity_scores))
+    }
   }
 }
 

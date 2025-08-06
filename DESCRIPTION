@@ -33,6 +33,7 @@ Imports:
     graphics
 Suggests:
     leiden,
+    ClustAssess,
     testthat (>= 3.0.0),
     knitr,
     rmarkdown,
