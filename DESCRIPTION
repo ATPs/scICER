@@ -6,7 +6,8 @@ Authors@R: person("Xiaolong", "Cao", email = "atps@outlook.com", role = c("aut",
 Description: scICER implements a systematic and efficient workflow to evaluate clustering 
     consistency in single-cell RNA-seq data. It generates multiple cluster labels using 
     the Leiden algorithm, calculates pairwise similarity with Element-Centric Similarity (ECS), 
-    and provides automated framework for finding consistent clusters. This R package is fully 
+    and provides automated framework for finding consistent clusters. Uses the optimized 
+    ClustAssess library for high-performance similarity calculations. This R package is fully 
     compatible with Seurat objects and designed for seamless integration into Seurat workflows.
 License: MIT + file LICENSE
 Encoding: UTF-8
@@ -30,10 +31,10 @@ Imports:
     methods,
     utils,
     grDevices,
-    graphics
+    graphics,
+    ClustAssess
 Suggests:
     leiden,
-    ClustAssess,
     testthat (>= 3.0.0),
     knitr,
     rmarkdown,

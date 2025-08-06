@@ -40,18 +40,15 @@ scICER evaluates clustering consistency by:
 
 *Note: These tradeoffs provide better integration with the Seurat ecosystem and R workflows*
 
-## Performance Optimization
+## Dependencies
 
-scICER now uses the optimized [ClustAssess](https://github.com/Core-Bioinformatics/ClustAssess) library for Element-Centric Similarity (ECS) calculations, providing:
+scICER requires the [ClustAssess](https://github.com/Core-Bioinformatics/ClustAssess) library for Element-Centric Similarity (ECS) calculations, which provides:
 
 - **~150x faster performance** for similarity calculations
-- **Identical results** to the original implementation
-- **Automatic fallback** to built-in implementation if ClustAssess is not available
+- **Professional, well-tested implementation** by Cambridge Core Bioinformatics
+- **Identical results** to reference implementations
 
-To get the best performance, install ClustAssess:
-```r
-install.packages("ClustAssess")
-```
+ClustAssess will be automatically installed when you install scICER.
 
 ## Installation
 
@@ -64,7 +61,7 @@ Ensure you have R ≥ 4.0.0 and the required dependencies:
 install.packages(c(
   "Seurat", "SeuratObject", "igraph", "Matrix", 
   "parallel", "foreach", "doParallel", "dplyr", 
-  "ggplot2", "devtools"
+  "ggplot2", "devtools", "ClustAssess"
 ))
 
 # Optional: Install leiden package for better performance
