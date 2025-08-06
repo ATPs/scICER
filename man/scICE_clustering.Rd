@@ -2,30 +2,31 @@
 \alias{scICE_clustering}
 \title{Run scICER clustering analysis on a Seurat object}
 \usage{
-scICE_clustering(object, cluster_range = 2:10, n_workers = max(1, parallel::detectCores() - 1),
-                n_trials = 15, n_bootstrap = 100, seed = NULL, beta = 0.01, n_iterations = 10,
-                max_iterations = 10, objective_function = "CPM",
-                remove_threshold = Inf, resolution_tolerance = 0.001,
-                graph_name = NULL, verbose = TRUE)
+scICE_clustering(object, graph_name = NULL, cluster_range = 1:20, n_workers = 10,
+                n_trials = 15, n_bootstrap = 100, seed = NULL, beta = 0.1, n_iterations = 10,
+                max_iterations = 150, ic_threshold = Inf, objective_function = "CPM",
+                remove_threshold = 1.15, resolution_tolerance = 1e-8, verbose = TRUE)
 }
 \arguments{
   \item{object}{A Seurat object with a precomputed SNN graph.}
   
-  \item{cluster_range}{Vector of cluster numbers to test (default: 2:10).}
+  \item{cluster_range}{Vector of cluster numbers to test (default: 1:20).}
   
-  \item{n_workers}{Number of parallel workers for computation (default: max(1, parallel::detectCores() - 1)).}
+  \item{n_workers}{Number of parallel workers for computation (default: 10).}
   
-  \item{n_trials}{Number of clustering trials per resolution (default: 100).}
+  \item{n_trials}{Number of clustering trials per resolution (default: 15).}
   
   \item{n_bootstrap}{Number of bootstrap iterations (default: 100).}
   
   \item{seed}{Random seed for reproducibility (default: NULL). When set, ensures identical results across multiple runs with the same parameters.}
   
-  \item{beta}{Beta parameter for Leiden clustering (default: 0.01).}
+  \item{beta}{Beta parameter for Leiden clustering (default: 0.1).}
   
   \item{n_iterations}{Number of Leiden iterations (default: 10).}
   
-  \item{max_iterations}{Maximum iterations for optimization (default: 10).}
+  \item{max_iterations}{Maximum iterations for optimization (default: 150).}
+  
+  \item{ic_threshold}{IC threshold for consistent clustering (default: Inf). Clusters with IC scores below this threshold are considered consistent.}
   
   \item{objective_function}{Objective function to use, either "modularity" or "CPM" (default: "CPM"). 
     \itemize{
@@ -37,9 +38,9 @@ scICE_clustering(object, cluster_range = 2:10, n_workers = max(1, parallel::dete
             (known as the resolution limit).
     }}
   
-  \item{remove_threshold}{Threshold for removing inconsistent results (default: Inf). Set to Inf to include all cluster numbers for plotting and analysis.}
+  \item{remove_threshold}{Threshold for removing inconsistent results (default: 1.15). Set to Inf to include all cluster numbers for plotting and analysis.}
   
-  \item{resolution_tolerance}{Tolerance for resolution parameter search (default: 0.001).}
+  \item{resolution_tolerance}{Tolerance for resolution parameter search (default: 1e-8).}
   
   \item{graph_name}{Name of the graph to use for clustering. If NULL (default), will use the default SNN graph from the active assay (e.g., "RNA_snn" for RNA assay).}
   

@@ -30,7 +30,7 @@
 #' @param beta Beta parameter for Leiden clustering (default: 0.1)
 #' @param n_iterations Number of Leiden iterations (default: 10)
 #' @param max_iterations Maximum iterations for optimization (default: 150)
-#' @param ic_threshold IC threshold for consistent clustering (default: 1.005)
+#' @param ic_threshold IC threshold for consistent clustering (default: Inf)
 #' @param objective_function Objective function for Leiden ("modularity" or "CPM", default: "CPM")
 #' @param remove_threshold Threshold for removing inconsistent results (default: 1.15)
 #' @param resolution_tolerance Tolerance for resolution parameter search (default: 1e-8)
@@ -78,7 +78,7 @@ scICE_clustering <- function(object,
                             max_iterations = 150,
                             ic_threshold = Inf,
                             objective_function = "CPM",
-                            remove_threshold = Inf,
+                            remove_threshold = 1.15,
                             resolution_tolerance = 1e-8,
                             verbose = TRUE) {
   
