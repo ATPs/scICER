@@ -37,22 +37,7 @@ calculate_ecs <- function(cluster_a, cluster_b, d = 0.9, return_vector = FALSE) 
   unique_ecs_vals <- matrix(NaN, nrow = length(unique_a), ncol = length(unique_b))
   ecs_scores <- numeric(n)
   
-  # Pre-allocate PageRank vectors
-  ppr1 <- matrix(0, nrow = n, ncol = length(unique_a))
-  ppr2 <- matrix(0, nrow = n, ncol = length(unique_b))
-  
-  # Pre-compute PageRank vectors for each cluster
-  for (i in seq_along(unique_a)) {
-    ppr1[groups_a[[i]], i] <- cluster_sizes_a[i]
-    ppr1[groups_a[[i]][1], i] <- 1.0 - d + cluster_sizes_a[i]  # Add base score to first node
-  }
-  
-  for (i in seq_along(unique_b)) {
-    ppr2[groups_b[[i]], i] <- cluster_sizes_b[i]
-    ppr2[groups_b[[i]][1], i] <- 1.0 - d + cluster_sizes_b[i]  # Add base score to first node
-  }
-  
-  # Calculate ECS scores
+  # Calculate ECS scores - matching Julia's simmat_v2 behavior
   for (i in 1:n) {
     pos_a <- which(unique_a == cluster_a[i])
     pos_b <- which(unique_b == cluster_b[i])
@@ -63,8 +48,20 @@ calculate_ecs <- function(cluster_a, cluster_b, d = 0.9, return_vector = FALSE) 
       neighbors_b <- groups_b[[pos_b]]
       all_neighbors <- unique(c(neighbors_a, neighbors_b))
       
-      # Calculate L1 distance using pre-computed vectors
-      l1_distance <- sum(abs(ppr2[all_neighbors, pos_b] - ppr1[all_neighbors, pos_a]))
+      # Initialize PageRank vectors (matching Julia's approach)
+      ppr1 <- numeric(n)
+      ppr2 <- numeric(n)
+      
+      # Set cluster members to cluster size (Julia's approach)
+      ppr1[neighbors_a] <- cluster_sizes_a[pos_a]
+      ppr2[neighbors_b] <- cluster_sizes_b[pos_b]
+      
+      # Set current node to base score + cluster size (Julia's approach)
+      ppr1[i] <- 1.0 - d + cluster_sizes_a[pos_a]
+      ppr2[i] <- 1.0 - d + cluster_sizes_b[pos_b]
+      
+      # Calculate L1 distance
+      l1_distance <- sum(abs(ppr2[all_neighbors] - ppr1[all_neighbors]))
       
       ecs_scores[i] <- l1_distance
       unique_ecs_vals[pos_a, pos_b] <- l1_distance
