@@ -32,7 +32,7 @@ leiden_clustering <- function(igraph_obj, resolution, objective_function,
       weights = weights,
       n_iterations = n_iterations,
       beta = beta,
-      initial_membership = initial_membership
+      initial_membership = NULL
     )
   } else { # CPM
     # For CPM, use the CPM quality function
@@ -43,7 +43,7 @@ leiden_clustering <- function(igraph_obj, resolution, objective_function,
       weights = weights,
       n_iterations = n_iterations,
       beta = beta,
-      initial_membership = initial_membership
+      initial_membership = NULL
     )
   }
   

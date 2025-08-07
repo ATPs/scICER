@@ -134,12 +134,12 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   
   # Determine resolution search bounds
   if (objective_function == "modularity") {
-    start_g <- 0
+    start_g <- -13
     end_g <- 20  # Increased for higher cluster numbers
   } else { # CPM
     start_g <- log(resolution_tolerance)
-    if (start_g < -13) start_g <- -13
-    end_g <- 2  # Increased for higher cluster numbers
+    if (start_g < -20) start_g <- -20
+    end_g <- 20  # Increased for higher cluster numbers
   }
   
   # Binary search for resolution ranges
