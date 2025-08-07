@@ -511,9 +511,9 @@ The `scICE_clustering()` function returns a list containing:
 
 ### Interpretation Guidelines
 
-- **IC < 1.005**: Highly consistent clustering (recommended)
-- **IC 1.005-1.01**: Moderately consistent clustering
-- **IC > 1.01**: Low consistency (not recommended)
+- **IC < 1.005**: Highly consistent clustering (recommended), less than 0.5% of cells is inconsistent.
+- **IC 1.005-1.01**: Moderately consistent clustering, 0.5% to 1% of cells is inconsistent.
+- **IC > 1.01**: Low consistency (not recommended), more than 1% of cells is inconsistent.
 
 ### Visualization Outputs
 
