@@ -240,9 +240,16 @@ Idents(seurat_obj) <- "clusters_8"
 markers <- FindAllMarkers(seurat_obj)
 ```
 
+### scICER paper
+
+The codes used to generate results in scICER paper are available at GitHub (https://github.com/yerry77/scICER-workflow). 
+
 ## scLENS: Single-cell Linear Embedding of Neighborhoods and Signals
 
 scICER also includes **scLENS**, a dimensionality reduction method that uses Random Matrix Theory (RMT) to distinguish signal from noise and performs robustness testing to identify stable signals.
+
+## Note
+⚠️ **Performance Note**: While R version of scLENS provides reasonable results, it does not fully match the performance of the original Julia implementation. The R version runs considerably slower and requires substantially more memory. We recommend using R version of scLENS primarily for exploratory analysis or when Julia is not available in your workflow.
 
 ### Key Features of scLENS
 
