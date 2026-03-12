@@ -55,3 +55,4 @@ test_*\.R
 *.pdf
 *.qs
 
+.git/
