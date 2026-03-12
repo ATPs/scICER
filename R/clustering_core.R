@@ -104,7 +104,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   # Clear clustering cache at start for fresh run
   if (verbose) {
     cache_stats_before <- get_cache_stats()
-    message(paste("CLUSTERING_MAIN: Cache entries before clearing:", cache_stats_before$cache_entries))
+    scice_message(paste("CLUSTERING_MAIN: Cache entries before clearing:", cache_stats_before$cache_entries))
   }
   clear_clustering_cache()
   
@@ -112,8 +112,8 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   if (!is.null(seed)) {
     set.seed(seed)
     if (verbose) {
-      message(paste("CLUSTERING_MAIN: Setting random seed to:", seed))
-      message(paste("CLUSTERING_MAIN: Thread context - PID:", Sys.getpid()))
+      scice_message(paste("CLUSTERING_MAIN: Setting random seed to:", seed))
+      scice_message(paste("CLUSTERING_MAIN: Thread context - PID:", Sys.getpid()))
     }
   }
   
@@ -144,10 +144,10 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   
   # Binary search for resolution ranges
   if (verbose) {
-    message("CLUSTERING_MAIN: Starting binary search for resolution ranges...")
-    message(paste("CLUSTERING_MAIN: Objective function:", objective_function))
-    message(paste("CLUSTERING_MAIN: Search bounds: [", start_g, ", ", end_g, "]", sep = ""))
-    message(paste("CLUSTERING_MAIN: Target cluster range:", paste(cluster_range, collapse = ", ")))
+    scice_message("CLUSTERING_MAIN: Starting binary search for resolution ranges...")
+    scice_message(paste("CLUSTERING_MAIN: Objective function:", objective_function))
+    scice_message(paste("CLUSTERING_MAIN: Search bounds: [", start_g, ", ", end_g, "]", sep = ""))
+    scice_message(paste("CLUSTERING_MAIN: Target cluster range:", paste(cluster_range, collapse = ", ")))
     resolution_search_start <- Sys.time()
   }
   
@@ -158,26 +158,26 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   
   if (verbose) {
     resolution_search_time <- as.numeric(difftime(Sys.time(), resolution_search_start, units = "secs"))
-    message(paste("CLUSTERING_MAIN: Resolution search completed in", round(resolution_search_time, 3), "seconds"))
-    message(paste("CLUSTERING_MAIN: Found resolution ranges for", length(gamma_dict), "cluster numbers"))
+    scice_message(paste("CLUSTERING_MAIN: Resolution search completed in", round(resolution_search_time, 3), "seconds"))
+    scice_message(paste("CLUSTERING_MAIN: Found resolution ranges for", length(gamma_dict), "cluster numbers"))
     if (length(gamma_dict) > 0) {
       for (i in 1:min(5, length(gamma_dict))) {
         cluster_num <- names(gamma_dict)[i]
         range_vals <- gamma_dict[[cluster_num]]
-        message(paste("CLUSTERING_MAIN:   k=", cluster_num, ": gamma ∈ [", 
+        scice_message(paste("CLUSTERING_MAIN:   k=", cluster_num, ": gamma ∈ [", 
                      round(range_vals[1], 4), ", ", round(range_vals[2], 4), "]", sep = ""))
       }
       if (length(gamma_dict) > 5) {
-        message(paste("CLUSTERING_MAIN:   ... and", length(gamma_dict) - 5, "more"))
+        scice_message(paste("CLUSTERING_MAIN:   ... and", length(gamma_dict) - 5, "more"))
       }
     }
   }
   
   # Filter out problematic cluster numbers in parallel
   if (verbose) {
-    message("CLUSTERING_MAIN: Starting problematic cluster filtering...")
-    message(paste("CLUSTERING_MAIN: Remove threshold:", remove_threshold))
-    message(paste("CLUSTERING_MAIN: Platform:", .Platform$OS.type))
+    scice_message("CLUSTERING_MAIN: Starting problematic cluster filtering...")
+    scice_message(paste("CLUSTERING_MAIN: Remove threshold:", remove_threshold))
+    scice_message(paste("CLUSTERING_MAIN: Platform:", .Platform$OS.type))
     filtering_start <- Sys.time()
   }
   
@@ -185,9 +185,9 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   actual_workers <- if (.Platform$OS.type == "windows" && n_workers > 1) 1 else n_workers
   
   if (verbose) {
-    message(paste("CLUSTERING_MAIN: Using", actual_workers, "workers for filtering (requested:", n_workers, ")"))
+    scice_message(paste("CLUSTERING_MAIN: Using", actual_workers, "workers for filtering (requested:", n_workers, ")"))
     if (in_parallel_context) {
-      message("CLUSTERING_MAIN: Running in parallel context - using 1 worker for nested operations")
+      scice_message("CLUSTERING_MAIN: Running in parallel context - using 1 worker for nested operations")
     }
   }
   
@@ -207,7 +207,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
     }
     
     if (verbose && in_parallel_context) {
-      message(paste("CLUSTERING_MAIN: Nested worker optimization - using", nested_workers, 
+      scice_message(paste("CLUSTERING_MAIN: Nested worker optimization - using", nested_workers, 
                    "workers per cluster ( ", actual_workers, "total /", length(cluster_range), "clusters)"))
     }
             ic_scores <- cross_platform_mclapply(gamma_test, function(gamma_val) {
@@ -239,30 +239,30 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   
   if (verbose) {
     filtering_time <- as.numeric(difftime(Sys.time(), filtering_start, units = "secs"))
-    message(paste("CLUSTERING_MAIN: Filtering completed in", round(filtering_time, 3), "seconds"))
-    message(paste("CLUSTERING_MAIN: Processed", length(cluster_filter_results), "cluster numbers"))
+    scice_message(paste("CLUSTERING_MAIN: Filtering completed in", round(filtering_time, 3), "seconds"))
+    scice_message(paste("CLUSTERING_MAIN: Processed", length(cluster_filter_results), "cluster numbers"))
     if (length(excluded_numbers) > 0) {
-      message(paste("CLUSTERING_MAIN: Excluded", length(excluded_numbers), "cluster numbers:", paste(excluded_numbers, collapse = ", ")))
+      scice_message(paste("CLUSTERING_MAIN: Excluded", length(excluded_numbers), "cluster numbers:", paste(excluded_numbers, collapse = ", ")))
       # Report exclusion reasons
       exclusion_reasons <- sapply(cluster_filter_results, function(x) if(x$excluded) paste(x$cluster_num, ":", x$reason) else NULL)
       exclusion_reasons <- unlist(exclusion_reasons)
       if (length(exclusion_reasons) > 0) {
-        message("CLUSTERING_MAIN: Exclusion reasons:")
+        scice_message("CLUSTERING_MAIN: Exclusion reasons:")
         for (reason in exclusion_reasons) {
-          message(paste("CLUSTERING_MAIN:   ", reason))
+          scice_message(paste("CLUSTERING_MAIN:   ", reason))
         }
       }
     } else {
-      message("CLUSTERING_MAIN: No clusters excluded during filtering")
+      scice_message("CLUSTERING_MAIN: No clusters excluded during filtering")
     }
   }
   
   valid_clusters <- setdiff(cluster_range, excluded_numbers)
   
   if (verbose) {
-    message(paste("CLUSTERING_MAIN: Valid clusters for optimization:", length(valid_clusters)))
+    scice_message(paste("CLUSTERING_MAIN: Valid clusters for optimization:", length(valid_clusters)))
     if (length(valid_clusters) > 0) {
-      message(paste("CLUSTERING_MAIN: Valid cluster numbers:", paste(valid_clusters, collapse = ", ")))
+      scice_message(paste("CLUSTERING_MAIN: Valid cluster numbers:", paste(valid_clusters, collapse = ", ")))
     }
   }
   
@@ -309,10 +309,10 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   
   if (length(valid_clusters) == 0) {
     if (verbose) {
-      message("CLUSTERING_MAIN: WARNING - No valid cluster numbers found!")
-      message("CLUSTERING_MAIN: All clusters were excluded during filtering")
-      message("CLUSTERING_MAIN: This will result in empty IC results")
-      message("CLUSTERING_MAIN: Returning results with only excluded cluster information")
+      scice_message("CLUSTERING_MAIN: WARNING - No valid cluster numbers found!")
+      scice_message("CLUSTERING_MAIN: All clusters were excluded during filtering")
+      scice_message("CLUSTERING_MAIN: This will result in empty IC results")
+      scice_message("CLUSTERING_MAIN: Returning results with only excluded cluster information")
     }
     # Return results with only excluded clusters
     return(list(
@@ -332,8 +332,8 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   
   # Optimize clustering for each valid cluster number in parallel
   if (verbose) {
-    message("CLUSTERING_MAIN: Starting clustering optimization...")
-    message(paste("CLUSTERING_MAIN: Optimizing", length(valid_clusters), "cluster numbers"))
+    scice_message("CLUSTERING_MAIN: Starting clustering optimization...")
+    scice_message(paste("CLUSTERING_MAIN: Optimizing", length(valid_clusters), "cluster numbers"))
     optimization_start <- Sys.time()
   }
   
@@ -341,15 +341,15 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   actual_workers_opt <- if (.Platform$OS.type == "windows" && n_workers > 1) 1 else n_workers
   
   if (verbose) {
-    message(paste("CLUSTERING_MAIN: Using", actual_workers_opt, "workers for optimization"))
-    message(paste("CLUSTERING_MAIN: Progress tracking:"))
+    scice_message(paste("CLUSTERING_MAIN: Using", actual_workers_opt, "workers for optimization"))
+    scice_message(paste("CLUSTERING_MAIN: Progress tracking:"))
     progress_start_time <- Sys.time()
     
     # Pre-calculate estimated time per cluster for progress tracking
     if (length(valid_clusters) > 1) {
       estimated_time_per_cluster <- (n_trials * length(valid_clusters) * n_bootstrap) / (actual_workers_opt * 100)  # rough estimate
       total_estimated_time <- estimated_time_per_cluster * length(valid_clusters)
-      message(paste("CLUSTERING_MAIN: Estimated total time:", round(total_estimated_time, 1), "seconds"))
+      scice_message(paste("CLUSTERING_MAIN: Estimated total time:", round(total_estimated_time, 1), "seconds"))
     }
   }
   
@@ -358,13 +358,13 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
     worker_id <- paste("WORKER", cluster_num)
     
     if (verbose) {
-      message(paste(worker_id, ": Starting optimization for k =", cluster_num))
-      message(paste(worker_id, ": Thread context - PID:", Sys.getpid()))
+      scice_message(paste(worker_id, ": Starting optimization for k =", cluster_num))
+      scice_message(paste(worker_id, ": Thread context - PID:", Sys.getpid()))
     }
     
     if (!(as.character(cluster_num) %in% names(gamma_dict))) {
       if (verbose) {
-        message(paste(worker_id, ": ERROR - No gamma range found for k =", cluster_num))
+        scice_message(paste(worker_id, ": ERROR - No gamma range found for k =", cluster_num))
       }
       return(NULL)
     }
@@ -372,8 +372,8 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
     gamma_range <- gamma_dict[[as.character(cluster_num)]]
     
     if (verbose) {
-      message(paste(worker_id, ": Gamma range [", round(gamma_range[1], 4), ", ", round(gamma_range[2], 4), "]", sep = ""))
-      message(paste(worker_id, ": Starting intensive optimization..."))
+      scice_message(paste(worker_id, ": Gamma range [", round(gamma_range[1], 4), ", ", round(gamma_range[2], 4), "]", sep = ""))
+      scice_message(paste(worker_id, ": Starting intensive optimization..."))
       opt_start_time <- Sys.time()
     }
     
@@ -386,7 +386,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
     
     if (verbose) {
       opt_time <- as.numeric(difftime(Sys.time(), opt_start_time, units = "secs"))
-      message(paste(worker_id, ": Optimization completed in", round(opt_time, 3), "seconds"))
+      scice_message(paste(worker_id, ": Optimization completed in", round(opt_time, 3), "seconds"))
     }
     
     if (!is.null(result)) {
@@ -413,9 +413,9 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   
   if (verbose) {
     optimization_time <- as.numeric(difftime(Sys.time(), optimization_start, units = "secs"))
-    message(paste("CLUSTERING_MAIN: All optimization workers completed in", round(optimization_time, 3), "seconds"))
+    scice_message(paste("CLUSTERING_MAIN: All optimization workers completed in", round(optimization_time, 3), "seconds"))
     successful_count <- sum(!sapply(cluster_results, is.null))
-    message(paste("CLUSTERING_MAIN: Successful optimizations:", successful_count, "/", length(valid_clusters)))
+    scice_message(paste("CLUSTERING_MAIN: Successful optimizations:", successful_count, "/", length(valid_clusters)))
   }
   
   # Combine successful results
@@ -526,8 +526,8 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   # Report cache statistics for performance monitoring
   if (verbose) {
     cache_stats_final <- get_cache_stats()
-    message(paste("CLUSTERING_MAIN: Final cache entries:", cache_stats_final$cache_entries))
-    message(paste("CLUSTERING_MAIN: Cache provided", cache_stats_final$cache_entries, "reused clustering results"))
+    scice_message(paste("CLUSTERING_MAIN: Final cache entries:", cache_stats_final$cache_entries))
+    scice_message(paste("CLUSTERING_MAIN: Cache provided", cache_stats_final$cache_entries, "reused clustering results"))
   }
   
   # Convert back to list format for compatibility - with defensive programming
@@ -576,7 +576,7 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
   }
   
   if (verbose && in_parallel_context) {
-    message(paste("RESOLUTION_SEARCH: Nested worker optimization - using", nested_workers, 
+    scice_message(paste("RESOLUTION_SEARCH: Nested worker optimization - using", nested_workers, 
                  "workers per cluster ( ", n_workers, "total /", length(cluster_range), "clusters)"))
   }
   
@@ -588,6 +588,10 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
     
     # Use tighter tolerance for better precision in distinguishing adjacent cluster numbers
     effective_tolerance <- resolution_tolerance / 10
+    
+    if (verbose) {
+      scice_message(paste("RESOLUTION_SEARCH: k =", target_clusters, "- starting lower bound search"))
+    }
     
     # Binary search for lower bound with fallback
     while (abs(if (objective_function == "modularity") left - right else exp(left) - exp(right)) > effective_tolerance && iteration_count < max_iterations) {
@@ -609,6 +613,22 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
       
       # Use apply for efficient calculation - count unique clusters instead of max + 1
       n_clusters_obtained <- stats::median(apply(cluster_results, 2, function(x) length(unique(x))))
+      if (verbose && (iteration_count == 1 || iteration_count %% 5 == 0)) {
+        interval_span <- if (objective_function == "modularity") {
+          abs(right - left)
+        } else {
+          abs(exp(right) - exp(left))
+        }
+        scice_message(
+          paste(
+            "RESOLUTION_SEARCH: k =", target_clusters,
+            "lower-bound progress", iteration_count, "/", max_iterations,
+            "- gamma =", signif(gamma_val, 6),
+            "- median clusters =", n_clusters_obtained,
+            "- interval span =", signif(interval_span, 6)
+          )
+        )
+      }
       
       if (n_clusters_obtained < target_clusters) {
         left <- mid
@@ -623,6 +643,10 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
     left <- left_bound
     right <- end_g
     iteration_count <- 0
+    
+    if (verbose) {
+      scice_message(paste("RESOLUTION_SEARCH: k =", target_clusters, "- starting upper bound search"))
+    }
     
     while (abs(if (objective_function == "modularity") left - right else exp(left) - exp(right)) > effective_tolerance && iteration_count < max_iterations) {
       iteration_count <- iteration_count + 1
@@ -643,6 +667,22 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
       
       # Use apply for efficient calculation - count unique clusters instead of max + 1
       n_clusters_obtained <- stats::median(apply(cluster_results, 2, function(x) length(unique(x))))
+      if (verbose && (iteration_count == 1 || iteration_count %% 5 == 0)) {
+        interval_span <- if (objective_function == "modularity") {
+          abs(right - left)
+        } else {
+          abs(exp(right) - exp(left))
+        }
+        scice_message(
+          paste(
+            "RESOLUTION_SEARCH: k =", target_clusters,
+            "upper-bound progress", iteration_count, "/", max_iterations,
+            "- gamma =", signif(gamma_val, 6),
+            "- median clusters =", n_clusters_obtained,
+            "- interval span =", signif(interval_span, 6)
+          )
+        )
+      }
       
       if (n_clusters_obtained > target_clusters) {
         right <- mid
@@ -652,6 +692,17 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
     }
     
     right_bound <- left
+    
+    if (verbose) {
+      display_left <- if (objective_function == "CPM") exp(left_bound) else left_bound
+      display_right <- if (objective_function == "CPM") exp(right_bound) else right_bound
+      scice_message(
+        paste0(
+          "RESOLUTION_SEARCH: k = ", target_clusters,
+          " - bounds identified [", signif(display_left, 6), ", ", signif(display_right, 6), "]"
+        )
+      )
+    }
     
     # If bounds are identical or invalid, create a cluster-specific range
     if (identical(left_bound, right_bound) || is.na(left_bound) || is.na(right_bound)) {
@@ -713,7 +764,7 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
       # Check for overlap or identical ranges
       if (current_left <= prev_right && abs(current_left - prev_right) < resolution_tolerance * 10) {
         if (verbose) {
-          message(paste("RESOLUTION_SEARCH: Adjusting overlapping ranges for clusters", 
+          scice_message(paste("RESOLUTION_SEARCH: Adjusting overlapping ranges for clusters", 
                        results_dt$cluster_number[i-1], "and", results_dt$cluster_number[i]))
         }
         
@@ -756,26 +807,26 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
     cluster_seed <- seed + target_clusters * 1000  # Different seed per cluster number
     set.seed(cluster_seed)
     if (verbose) {
-      message(paste(worker_id, ": Set deterministic seed:", cluster_seed))
+      scice_message(paste(worker_id, ": Set deterministic seed:", cluster_seed))
     }
   }
   
   if (verbose) {
-    message(paste(worker_id, ": Optimization parameters:"))
-    message(paste(worker_id, ":   Target clusters:", target_clusters))
-    message(paste(worker_id, ":   Trials per gamma:", n_trials))
-    message(paste(worker_id, ":   Bootstrap iterations:", n_bootstrap))
-    message(paste(worker_id, ":   Max iterations:", max_iterations))
-    message(paste(worker_id, ":   Beta:", beta))
-    message(paste(worker_id, ":   Leiden iterations:", n_iterations))
+    scice_message(paste(worker_id, ": Optimization parameters:"))
+    scice_message(paste(worker_id, ":   Target clusters:", target_clusters))
+    scice_message(paste(worker_id, ":   Trials per gamma:", n_trials))
+    scice_message(paste(worker_id, ":   Bootstrap iterations:", n_bootstrap))
+    scice_message(paste(worker_id, ":   Max iterations:", max_iterations))
+    scice_message(paste(worker_id, ":   Beta:", beta))
+    scice_message(paste(worker_id, ":   Leiden iterations:", n_iterations))
   }
   
   n_steps <- 11
   delta_n <- 2
   
   if (verbose) {
-    message(paste(worker_id, ": Creating gamma sequence with", n_steps, "steps"))
-    message(paste(worker_id, ": Gamma range bounds: [", round(gamma_range[1], 4), ", ", round(gamma_range[2], 4), "]", sep = ""))
+    scice_message(paste(worker_id, ": Creating gamma sequence with", n_steps, "steps"))
+    scice_message(paste(worker_id, ": Gamma range bounds: [", round(gamma_range[1], 4), ", ", round(gamma_range[2], 4), "]", sep = ""))
   }
   
   # Create gamma sequence using efficient sequence generation
@@ -796,21 +847,21 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
   }
   
   if (verbose) {
-    message(paste(worker_id, ": Generated gamma sequence:"))
+    scice_message(paste(worker_id, ": Generated gamma sequence:"))
     for (i in 1:min(5, length(gamma_sequence))) {
-      message(paste(worker_id, ":   γ[", i, "] = ", round(gamma_sequence[i], 4), sep = ""))
+      scice_message(paste(worker_id, ":   γ[", i, "] = ", round(gamma_sequence[i], 4), sep = ""))
     }
     if (length(gamma_sequence) > 5) {
-      message(paste(worker_id, ":   ... and", length(gamma_sequence) - 5, "more"))
+      scice_message(paste(worker_id, ":   ... and", length(gamma_sequence) - 5, "more"))
     }
   }
   
   # Test initial clustering for each gamma in parallel
   if (verbose) {
-    message(paste(worker_id, ": Phase 1 - Testing", length(gamma_sequence), "gamma values with", n_trials, "trials each"))
+    scice_message(paste(worker_id, ": Phase 1 - Testing", length(gamma_sequence), "gamma values with", n_trials, "trials each"))
     initial_phase_start <- Sys.time()
     if (in_parallel_context) {
-      message(paste(worker_id, ": Running in parallel context - using 1 worker for nested operations"))
+      scice_message(paste(worker_id, ": Running in parallel context - using 1 worker for nested operations"))
     }
   }
   
@@ -822,37 +873,71 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
   }
   
   if (verbose && in_parallel_context) {
-    message(paste(worker_id, ": Nested worker optimization - using", nested_workers, 
+    scice_message(paste(worker_id, ": Nested worker optimization - using", nested_workers, 
                  "workers per gamma ( ", n_workers, "total /", length(gamma_sequence), "gammas)"))
   }
   
-  clustering_results <- cross_platform_mclapply(gamma_sequence, function(gamma_val) {
-    # Set deterministic seed for this gamma if base seed provided
-    if (!is.null(seed)) {
-      gamma_seed <- cluster_seed + as.integer(gamma_val * 10000) %% 100000
-      set.seed(gamma_seed)
+  if (nested_workers == 1) {
+    clustering_results <- vector("list", length(gamma_sequence))
+    phase1_log_every <- max(1L, as.integer(floor(length(gamma_sequence) / 5)))
+    
+    for (gamma_idx in seq_along(gamma_sequence)) {
+      gamma_val <- gamma_sequence[gamma_idx]
+      
+      # Set deterministic seed for this gamma if base seed provided
+      if (!is.null(seed)) {
+        gamma_seed <- cluster_seed + as.integer(gamma_val * 10000) %% 100000
+        set.seed(gamma_seed)
+      }
+      
+      cluster_matrix <- replicate(n_trials, {
+        leiden_clustering(igraph_obj, gamma_val, objective_function, n_iterations, beta)
+      }, simplify = TRUE)
+      
+      mean_clusters <- stats::median(apply(cluster_matrix, 2, function(x) length(unique(x))))
+      clustering_results[[gamma_idx]] <- list(
+        matrix = cluster_matrix,
+        mean_clusters = mean_clusters
+      )
+      
+      if (verbose && (gamma_idx == 1 || gamma_idx %% phase1_log_every == 0 || gamma_idx == length(gamma_sequence))) {
+        scice_message(
+          paste(
+            worker_id, ": Phase 1 progress", gamma_idx, "/", length(gamma_sequence),
+            "- gamma =", round(gamma_val, 4), "- median clusters =", mean_clusters
+          )
+        )
+      }
     }
-    
-    cluster_matrix <- replicate(n_trials, {
-      leiden_clustering(igraph_obj, gamma_val, objective_function, n_iterations, beta)
-    }, simplify = TRUE)
-    
-    mean_clusters <- stats::median(apply(cluster_matrix, 2, function(x) length(unique(x))))
-    
-    # Mini progress report for verbose mode
-    if (verbose && length(gamma_sequence) <= 5) {  # Only for small sequences to avoid spam
-      message(paste(worker_id, ":   γ =", round(gamma_val, 4), "→ median clusters =", mean_clusters))
-    }
-    
-    list(
-      matrix = cluster_matrix,
-      mean_clusters = mean_clusters
-    )
-  }, mc.cores = nested_workers)
+  } else {
+    clustering_results <- cross_platform_mclapply(gamma_sequence, function(gamma_val) {
+      # Set deterministic seed for this gamma if base seed provided
+      if (!is.null(seed)) {
+        gamma_seed <- cluster_seed + as.integer(gamma_val * 10000) %% 100000
+        set.seed(gamma_seed)
+      }
+      
+      cluster_matrix <- replicate(n_trials, {
+        leiden_clustering(igraph_obj, gamma_val, objective_function, n_iterations, beta)
+      }, simplify = TRUE)
+      
+      mean_clusters <- stats::median(apply(cluster_matrix, 2, function(x) length(unique(x))))
+      
+      # Mini progress report for verbose mode
+      if (verbose && length(gamma_sequence) <= 5) {  # Only for small sequences to avoid spam
+        scice_message(paste(worker_id, ":   γ =", round(gamma_val, 4), "→ median clusters =", mean_clusters))
+      }
+      
+      list(
+        matrix = cluster_matrix,
+        mean_clusters = mean_clusters
+      )
+    }, mc.cores = nested_workers)
+  }
   
   if (verbose) {
     initial_phase_time <- as.numeric(difftime(Sys.time(), initial_phase_start, units = "secs"))
-    message(paste(worker_id, ": Phase 1 completed in", round(initial_phase_time, 3), "seconds"))
+    scice_message(paste(worker_id, ": Phase 1 completed in", round(initial_phase_time, 3), "seconds"))
   }
   
   # Extract results
@@ -860,12 +945,12 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
   clustering_matrices <- lapply(clustering_results, function(x) x$matrix)
   
   if (verbose) {
-    message(paste(worker_id, ": Phase 2 - Filtering for target cluster count:", target_clusters))
+    scice_message(paste(worker_id, ": Phase 2 - Filtering for target cluster count:", target_clusters))
     cluster_counts <- table(mean_clusters)
     for (i in 1:length(cluster_counts)) {
       count_val <- names(cluster_counts)[i]
       freq <- cluster_counts[i]
-      message(paste(worker_id, ":   ", freq, "gammas → ", count_val, " clusters", sep = ""))
+      scice_message(paste(worker_id, ":   ", freq, "gammas → ", count_val, " clusters", sep = ""))
     }
   }
   
@@ -874,13 +959,13 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
   
   if (length(valid_indices) == 0) {
     if (verbose) {
-      message(paste(worker_id, ": ERROR - No gammas produced target cluster count", target_clusters))
+      scice_message(paste(worker_id, ": ERROR - No gammas produced target cluster count", target_clusters))
     }
     return(NULL)
   }
   
   if (verbose) {
-    message(paste(worker_id, ": Found", length(valid_indices), "gammas producing", target_clusters, "clusters"))
+    scice_message(paste(worker_id, ": Found", length(valid_indices), "gammas producing", target_clusters, "clusters"))
   }
   
   gamma_sequence <- gamma_sequence[valid_indices]
@@ -888,7 +973,7 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
   
   # Calculate IC for each gamma in parallel
   if (verbose) {
-    message(paste(worker_id, ": Phase 3 - Calculating IC scores for", length(gamma_sequence), "valid gammas"))
+    scice_message(paste(worker_id, ": Phase 3 - Calculating IC scores for", length(gamma_sequence), "valid gammas"))
     ic_phase_start <- Sys.time()
   }
   
@@ -902,11 +987,11 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
   
   if (verbose) {
     ic_phase_time <- as.numeric(difftime(Sys.time(), ic_phase_start, units = "secs"))
-    message(paste(worker_id, ": IC calculation completed in", round(ic_phase_time, 3), "seconds"))
-    message(paste(worker_id, ": IC score range: [", round(min(ic_scores), 4), ", ", round(max(ic_scores), 4), "]", sep = ""))
+    scice_message(paste(worker_id, ": IC calculation completed in", round(ic_phase_time, 3), "seconds"))
+    scice_message(paste(worker_id, ": IC score range: [", round(min(ic_scores), 4), ", ", round(max(ic_scores), 4), "]", sep = ""))
     perfect_scores <- sum(ic_scores == 1)
     if (perfect_scores > 0) {
-      message(paste(worker_id, ": Found", perfect_scores, "perfect IC scores (= 1.0)"))
+      scice_message(paste(worker_id, ": Found", perfect_scores, "perfect IC scores (= 1.0)"))
     }
   }
   
@@ -921,14 +1006,14 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
   k <- n_iterations
   
   if (verbose) {
-    message(paste(worker_id, ": Best gamma:", round(best_gamma, 4), "with IC score:", round(ic_scores[best_index], 4)))
+    scice_message(paste(worker_id, ": Best gamma:", round(best_gamma, 4), "with IC score:", round(ic_scores[best_index], 4)))
   }
   
   # If no perfect IC found, iterate to improve
   if (ic_scores[best_index] != 1 && length(gamma_sequence) > 1) {
     if (verbose) {
-      message(paste(worker_id, ": Phase 4 - Iterative improvement (IC =", round(ic_scores[best_index], 4), "< 1.0)"))
-      message(paste(worker_id, ": Starting with", length(gamma_sequence), "gamma values"))
+      scice_message(paste(worker_id, ": Phase 4 - Iterative improvement (IC =", round(ic_scores[best_index], 4), "< 1.0)"))
+      scice_message(paste(worker_id, ": Starting with", length(gamma_sequence), "gamma values"))
       iterative_start <- Sys.time()
     }
     
@@ -945,7 +1030,7 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
       iteration_count <- iteration_count + 1
       
       if (verbose) {
-        message(paste(worker_id, ": Iteration", iteration_count, "(k =", k, ") - Refining", length(current_gammas), "gamma values"))
+        scice_message(paste(worker_id, ": Iteration", iteration_count, "(k =", k, ") - Refining", length(current_gammas), "gamma values"))
         iter_start <- Sys.time()
       }
       
@@ -982,8 +1067,8 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
       
       if (verbose) {
         iter_time <- as.numeric(difftime(Sys.time(), iter_start, units = "secs"))
-        message(paste(worker_id, ": Iteration", iteration_count, "completed in", round(iter_time, 3), "seconds"))
-        message(paste(worker_id, ": New IC range: [", round(min(new_ic), 4), ", ", round(max(new_ic), 4), "]", sep = ""))
+        scice_message(paste(worker_id, ": Iteration", iteration_count, "completed in", round(iter_time, 3), "seconds"))
+        scice_message(paste(worker_id, ": New IC range: [", round(min(new_ic), 4), ", ", round(max(new_ic), 4), "]", sep = ""))
       }
       
       # Update IC history
@@ -994,8 +1079,8 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
       perfect_indices <- which(new_ic == 1)
       
       if (verbose) {
-        message(paste(worker_id, ": Stable gammas:", sum(stable_indices), "/", length(stable_indices)))
-        message(paste(worker_id, ": Perfect IC scores:", length(perfect_indices)))
+        scice_message(paste(worker_id, ": Stable gammas:", sum(stable_indices), "/", length(stable_indices)))
+        scice_message(paste(worker_id, ": Perfect IC scores:", length(perfect_indices)))
       }
       
       # Selection criteria
@@ -1004,7 +1089,7 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
         best_gamma <- current_gammas[best_index]
         best_clustering <- new_matrices[[best_index]]
         if (verbose) {
-          message(paste(worker_id, ": CONVERGED - Found perfect IC score at gamma =", round(best_gamma, 4)))
+          scice_message(paste(worker_id, ": CONVERGED - Found perfect IC score at gamma =", round(best_gamma, 4)))
         }
         break
       } else if (all(stable_indices)) {
@@ -1012,7 +1097,7 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
         best_gamma <- current_gammas[best_index]
         best_clustering <- new_matrices[[best_index]]
         if (verbose) {
-          message(paste(worker_id, ": CONVERGED - All gammas stable, best IC =", round(new_ic[best_index], 4)))
+          scice_message(paste(worker_id, ": CONVERGED - All gammas stable, best IC =", round(new_ic[best_index], 4)))
         }
         break
       } else {
@@ -1025,13 +1110,13 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
           best_gamma <- current_gammas[best_index]
           best_clustering <- new_matrices[[best_index]]
           if (verbose) {
-            message(paste(worker_id, ": CONVERGED - Single gamma remaining, IC =", round(new_ic[best_index], 4)))
+            scice_message(paste(worker_id, ": CONVERGED - Single gamma remaining, IC =", round(new_ic[best_index], 4)))
           }
           break
         }
         
         if (verbose) {
-          message(paste(worker_id, ": Continuing with", sum(keep_indices), "best gammas"))
+          scice_message(paste(worker_id, ": Continuing with", sum(keep_indices), "best gammas"))
         }
         
         current_gammas <- current_gammas[keep_indices]
@@ -1043,39 +1128,63 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
     
     if (verbose) {
       iterative_time <- as.numeric(difftime(Sys.time(), iterative_start, units = "secs"))
-      message(paste(worker_id, ": Phase 4 completed in", round(iterative_time, 3), "seconds after", iteration_count, "iterations"))
+      scice_message(paste(worker_id, ": Phase 4 completed in", round(iterative_time, 3), "seconds after", iteration_count, "iterations"))
     }
   }
   
-  # Bootstrap analysis in parallel
+  # Bootstrap analysis
   if (verbose) {
-    message(paste(worker_id, ": Phase 5 - Bootstrap analysis with", n_bootstrap, "iterations"))
+    scice_message(paste(worker_id, ": Phase 5 - Bootstrap analysis with", n_bootstrap, "iterations"))
     bootstrap_start <- Sys.time()
   }
   
-  ic_bootstrap <- cross_platform_mclapply(seq_len(n_bootstrap), function(i) {
-    # Set deterministic seed for this bootstrap iteration if base seed provided
-    if (!is.null(seed)) {
-      bootstrap_seed <- cluster_seed + 10000 + i
-      set.seed(bootstrap_seed)
-    }
+  if (nested_workers == 1) {
+    ic_bootstrap <- numeric(n_bootstrap)
+    phase5_log_every <- max(1L, as.integer(floor(n_bootstrap / 5)))
     
-    sample_indices <- sample.int(ncol(best_clustering), ncol(best_clustering), replace = TRUE)
-    bootstrap_matrix <- best_clustering[, sample_indices, drop = FALSE]
-    extracted <- extract_clustering_array(bootstrap_matrix)
-    ic_result <- calculate_ic_from_extracted(extracted)
-    return(1 / ic_result)
-  }, mc.cores = nested_workers)
+    for (i in seq_len(n_bootstrap)) {
+      # Set deterministic seed for this bootstrap iteration if base seed provided
+      if (!is.null(seed)) {
+        bootstrap_seed <- cluster_seed + 10000 + i
+        set.seed(bootstrap_seed)
+      }
+      
+      sample_indices <- sample.int(ncol(best_clustering), ncol(best_clustering), replace = TRUE)
+      bootstrap_matrix <- best_clustering[, sample_indices, drop = FALSE]
+      extracted <- extract_clustering_array(bootstrap_matrix)
+      ic_result <- calculate_ic_from_extracted(extracted)
+      ic_bootstrap[i] <- 1 / ic_result
+      
+      if (verbose && (i == 1 || i %% phase5_log_every == 0 || i == n_bootstrap)) {
+        scice_message(paste(worker_id, ": Phase 5 progress", i, "/", n_bootstrap, "- IC =", round(ic_bootstrap[i], 4)))
+      }
+    }
+  } else {
+    ic_bootstrap <- cross_platform_mclapply(seq_len(n_bootstrap), function(i) {
+      # Set deterministic seed for this bootstrap iteration if base seed provided
+      if (!is.null(seed)) {
+        bootstrap_seed <- cluster_seed + 10000 + i
+        set.seed(bootstrap_seed)
+      }
+      
+      sample_indices <- sample.int(ncol(best_clustering), ncol(best_clustering), replace = TRUE)
+      bootstrap_matrix <- best_clustering[, sample_indices, drop = FALSE]
+      extracted <- extract_clustering_array(bootstrap_matrix)
+      ic_result <- calculate_ic_from_extracted(extracted)
+      return(1 / ic_result)
+    }, mc.cores = nested_workers)
+    
+    ic_bootstrap <- unlist(ic_bootstrap)
+  }
   
-  ic_bootstrap <- unlist(ic_bootstrap)
   ic_median <- stats::median(ic_bootstrap)
   
   if (verbose) {
     bootstrap_time <- as.numeric(difftime(Sys.time(), bootstrap_start, units = "secs"))
-    message(paste(worker_id, ": Bootstrap analysis completed in", round(bootstrap_time, 3), "seconds"))
-    message(paste(worker_id, ": Bootstrap IC median:", round(ic_median, 4)))
-    message(paste(worker_id, ": Bootstrap IC range: [", round(min(ic_bootstrap), 4), ", ", round(max(ic_bootstrap), 4), "]", sep = ""))
-    message(paste(worker_id, ": OPTIMIZATION COMPLETE"))
+    scice_message(paste(worker_id, ": Bootstrap analysis completed in", round(bootstrap_time, 3), "seconds"))
+    scice_message(paste(worker_id, ": Bootstrap IC median:", round(ic_median, 4)))
+    scice_message(paste(worker_id, ": Bootstrap IC range: [", round(min(ic_bootstrap), 4), ", ", round(max(ic_bootstrap), 4), "]", sep = ""))
+    scice_message(paste(worker_id, ": OPTIMIZATION COMPLETE"))
   }
   
   # Extract best labels

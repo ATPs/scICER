@@ -107,98 +107,98 @@ scICE_clustering <- function(object,
   
   if (verbose) {
     start_time <- Sys.time()
-    message(paste(rep("=", 80), collapse = ""))
-    message("Starting scICE clustering analysis...")
-    message(paste("Timestamp:", format(start_time, "%Y-%m-%d %H:%M:%S")))
-    message(paste("R Session Info: R", R.version.string))
-    message(paste("Platform:", R.version$platform))
-    message(paste("OS Type:", .Platform$OS.type))
-    message(paste("Process ID:", Sys.getpid()))
-    message(paste(rep("-", 80), collapse = ""))
-    message("INPUT PARAMETERS:")
-    message(paste("  Using graph:", graph_name))
-    message(paste("  Testing cluster range:", paste(cluster_range, collapse = ", ")))
-    message(paste("  Range: ", min(cluster_range), "-", max(cluster_range), " (", length(cluster_range), " values)"))
-    message(paste("  Number of workers:", n_workers))
-    message(paste("  Number of trials per resolution:", n_trials))
-    message(paste("  Number of bootstrap iterations:", n_bootstrap))
-    message(paste("  Random seed:", if(is.null(seed)) "NULL (random)" else seed))
-    message(paste("  Beta parameter:", beta))
-    message(paste("  Leiden iterations:", n_iterations))
-    message(paste("  Maximum optimization iterations:", max_iterations))
-    message(paste("  IC threshold:", ic_threshold))
-    message(paste("  Objective function:", objective_function))
-    message(paste("  Remove threshold:", remove_threshold))
-    message(paste("  Resolution tolerance:", resolution_tolerance))
-    message(paste(rep("-", 80), collapse = ""))
+    scice_message(paste(rep("=", 80), collapse = ""))
+    scice_message("Starting scICE clustering analysis...")
+    scice_message(paste("Timestamp:", format(start_time, "%Y-%m-%d %H:%M:%S")))
+    scice_message(paste("R Session Info: R", R.version.string))
+    scice_message(paste("Platform:", R.version$platform))
+    scice_message(paste("OS Type:", .Platform$OS.type))
+    scice_message(paste("Process ID:", Sys.getpid()))
+    scice_message(paste(rep("-", 80), collapse = ""))
+    scice_message("INPUT PARAMETERS:")
+    scice_message(paste("  Using graph:", graph_name))
+    scice_message(paste("  Testing cluster range:", paste(cluster_range, collapse = ", ")))
+    scice_message(paste("  Range: ", min(cluster_range), "-", max(cluster_range), " (", length(cluster_range), " values)"))
+    scice_message(paste("  Number of workers:", n_workers))
+    scice_message(paste("  Number of trials per resolution:", n_trials))
+    scice_message(paste("  Number of bootstrap iterations:", n_bootstrap))
+    scice_message(paste("  Random seed:", if(is.null(seed)) "NULL (random)" else seed))
+    scice_message(paste("  Beta parameter:", beta))
+    scice_message(paste("  Leiden iterations:", n_iterations))
+    scice_message(paste("  Maximum optimization iterations:", max_iterations))
+    scice_message(paste("  IC threshold:", ic_threshold))
+    scice_message(paste("  Objective function:", objective_function))
+    scice_message(paste("  Remove threshold:", remove_threshold))
+    scice_message(paste("  Resolution tolerance:", resolution_tolerance))
+    scice_message(paste(rep("-", 80), collapse = ""))
   }
   
   # Set up parallel processing
   if (verbose) {
-    message("PARALLEL PROCESSING SETUP:")
-    message(paste("  Detected cores:", detectCores()))
-    message(paste("  Requested workers:", n_workers))
-    message(paste("  Already registered:", getDoParRegistered()))
+    scice_message("PARALLEL PROCESSING SETUP:")
+    scice_message(paste("  Detected cores:", detectCores()))
+    scice_message(paste("  Requested workers:", n_workers))
+    scice_message(paste("  Already registered:", getDoParRegistered()))
   }
   
   if (n_workers > 1) {
     if (!getDoParRegistered()) {
       actual_workers <- min(n_workers, detectCores() - 1)
       if (verbose) {
-        message(paste("  Creating cluster with", actual_workers, "workers"))
-        message(paste("  Thread setup: Creating parallel cluster"))
-        message(paste("  Backend: doParallel with", actual_workers, "cores"))
+        scice_message(paste("  Creating cluster with", actual_workers, "workers"))
+        scice_message(paste("  Thread setup: Creating parallel cluster"))
+        scice_message(paste("  Backend: doParallel with", actual_workers, "cores"))
       }
       cl <- parallel::makeCluster(actual_workers)
       doParallel::registerDoParallel(cl)
       on.exit(parallel::stopCluster(cl))
       if (verbose) {
-        message("  Parallel cluster created successfully")
+        scice_message("  Parallel cluster created successfully")
       }
     } else {
       if (verbose) {
-        message("  Using existing parallel backend")
+        scice_message("  Using existing parallel backend")
       }
     }
   } else {
     if (verbose) {
-      message("  Running in sequential mode (n_workers = 1)")
+      scice_message("  Running in sequential mode (n_workers = 1)")
     }
   }
   
   # Get graph from Seurat object
   if (verbose) {
-    message(paste(rep("-", 80), collapse = ""))
-    message("GRAPH EXTRACTION:")
-    message(paste("  Accessing graph:", graph_name))
-    message(paste("  Available graphs in object:", paste(names(object@graphs), collapse = ", ")))
+    scice_message(paste(rep("-", 80), collapse = ""))
+    scice_message("GRAPH EXTRACTION:")
+    scice_message(paste("  Accessing graph:", graph_name))
+    scice_message(paste("  Available graphs in object:", paste(names(object@graphs), collapse = ", ")))
   }
   
   graph <- object@graphs[[graph_name]]
   
   if (verbose) {
-    message(paste("  Graph extraction successful"))
-    message(paste("  Graph class:", paste(class(graph), collapse = ", ")))
-    message(paste("  Graph dimensions:", nrow(graph), "x", ncol(graph)))
-    message(paste("  Graph storage type:", typeof(graph)))
+    scice_message(paste("  Graph extraction successful"))
+    scice_message(paste("  Graph class:", paste(class(graph), collapse = ", ")))
+    scice_message(paste("  Graph dimensions:", nrow(graph), "x", ncol(graph)))
+    scice_message(paste("  Graph storage type:", typeof(graph)))
     if (inherits(graph, "dgCMatrix") || inherits(graph, "Matrix")) {
       n_nonzero <- sum(graph > 0)
-      message(paste("  Non-zero entries:", n_nonzero))
-      message(paste("  Sparsity:", round((1 - n_nonzero / (nrow(graph) * ncol(graph))) * 100, 2), "%"))
+      scice_message(paste("  Non-zero entries:", n_nonzero))
+      scice_message(paste("  Sparsity:", round((1 - n_nonzero / (nrow(graph) * ncol(graph))) * 100, 2), "%"))
       if (n_nonzero > 0) {
         weights <- as.vector(graph[graph > 0])
-        message(paste("  Weight range: [", round(min(weights), 4), ", ", round(max(weights), 4), "]", sep = ""))
-        message(paste("  Mean weight:", round(mean(weights), 4)))
+        scice_message(paste("  Weight range: [", round(min(weights), 4), ", ", round(max(weights), 4), "]", sep = ""))
+        scice_message(paste("  Mean weight:", round(mean(weights), 4)))
       }
     }
   }
   
   # Convert to igraph object
   if (verbose) {
-    message(paste(rep("-", 80), collapse = ""))
-    message("GRAPH CONVERSION:")
+    scice_message(paste(rep("-", 80), collapse = ""))
+    scice_message("GRAPH CONVERSION:")
     conversion_start <- Sys.time()
-    message(paste("  Starting graph conversion at:", format(conversion_start, "%H:%M:%S")))
+    scice_message(paste("  Starting graph conversion at:", format(conversion_start, "%H:%M:%S")))
   }
   
   igraph_obj <- graph_to_igraph(graph, verbose = verbose)
@@ -206,28 +206,28 @@ scICE_clustering <- function(object,
   if (verbose) {
     conversion_end <- Sys.time()
     conversion_time <- as.numeric(difftime(conversion_end, conversion_start, units = "secs"))
-    message(paste("  Graph conversion completed in:", round(conversion_time, 3), "seconds"))
-    message(paste("  Converted graph vertices:", igraph::vcount(igraph_obj)))
-    message(paste("  Converted graph edges:", igraph::ecount(igraph_obj)))
-    message(paste("  igraph object class:", paste(class(igraph_obj), collapse = ", ")))
+    scice_message(paste("  Graph conversion completed in:", round(conversion_time, 3), "seconds"))
+    scice_message(paste("  Converted graph vertices:", igraph::vcount(igraph_obj)))
+    scice_message(paste("  Converted graph edges:", igraph::ecount(igraph_obj)))
+    scice_message(paste("  igraph object class:", paste(class(igraph_obj), collapse = ", ")))
     if (igraph::ecount(igraph_obj) > 0) {
-      message(paste("  Graph is weighted:", igraph::is_weighted(igraph_obj)))
+      scice_message(paste("  Graph is weighted:", igraph::is_weighted(igraph_obj)))
       if (igraph::is_weighted(igraph_obj)) {
         edge_weights <- igraph::E(igraph_obj)$weight
-        message(paste("  Edge weight range: [", round(min(edge_weights), 4), ", ", round(max(edge_weights), 4), "]", sep = ""))
+        scice_message(paste("  Edge weight range: [", round(min(edge_weights), 4), ", ", round(max(edge_weights), 4), "]", sep = ""))
       }
     }
   }
   
   # Perform clustering analysis
   if (verbose) {
-    message(paste(rep("-", 80), collapse = ""))
-    message("CLUSTERING ANALYSIS:")
+    scice_message(paste(rep("-", 80), collapse = ""))
+    scice_message("CLUSTERING ANALYSIS:")
     clustering_start <- Sys.time()
-    message(paste("  Starting clustering analysis at:", format(clustering_start, "%H:%M:%S")))
-    message(paste("  Thread context: Main thread (PID:", Sys.getpid(), ")"))
+    scice_message(paste("  Starting clustering analysis at:", format(clustering_start, "%H:%M:%S")))
+    scice_message(paste("  Thread context: Main thread (PID:", Sys.getpid(), ")"))
     if (n_workers > 1) {
-      message(paste("  Parallel workers will be spawned for sub-tasks"))
+      scice_message(paste("  Parallel workers will be spawned for sub-tasks"))
     }
   }
   
@@ -251,14 +251,14 @@ scICE_clustering <- function(object,
   if (verbose) {
     clustering_end <- Sys.time()
     clustering_time <- as.numeric(difftime(clustering_end, clustering_start, units = "secs"))
-    message(paste("  Clustering analysis completed in:", round(clustering_time, 3), "seconds"))
-    message(paste("  Results structure:"))
-    message(paste("    - gamma length:", length(results$gamma)))
-    message(paste("    - labels length:", length(results$labels)))
-    message(paste("    - ic length:", length(results$ic)))
-    message(paste("    - n_cluster length:", length(results$n_cluster)))
+    scice_message(paste("  Clustering analysis completed in:", round(clustering_time, 3), "seconds"))
+    scice_message(paste("  Results structure:"))
+    scice_message(paste("    - gamma length:", length(results$gamma)))
+    scice_message(paste("    - labels length:", length(results$labels)))
+    scice_message(paste("    - ic length:", length(results$ic)))
+    scice_message(paste("    - n_cluster length:", length(results$n_cluster)))
     if (!is.null(results$excluded)) {
-      message(paste("    - excluded info available:", sum(results$excluded), "excluded clusters"))
+      scice_message(paste("    - excluded info available:", sum(results$excluded), "excluded clusters"))
     }
   }
   
@@ -270,21 +270,21 @@ scICE_clustering <- function(object,
   
   # Determine consistent clusters using actual cluster numbers, not indices
   if (verbose) {
-    message(paste(rep("-", 80), collapse = ""))
-    message("RESULTS ANALYSIS:")
-    message(paste("  IC threshold for consistency:", ic_threshold))
-    message(paste("  Results object is null:", is.null(results)))
-    message(paste("  IC vector is null:", is.null(results$ic)))
-    message(paste("  IC vector length:", if(!is.null(results$ic)) length(results$ic) else 0))
+    scice_message(paste(rep("-", 80), collapse = ""))
+    scice_message("RESULTS ANALYSIS:")
+    scice_message(paste("  IC threshold for consistency:", ic_threshold))
+    scice_message(paste("  Results object is null:", is.null(results)))
+    scice_message(paste("  IC vector is null:", is.null(results$ic)))
+    scice_message(paste("  IC vector length:", if(!is.null(results$ic)) length(results$ic) else 0))
   }
   
   if (!is.null(results) && !is.null(results$ic) && length(results$ic) > 0) {
     valid_ic <- results$ic[!is.na(results$ic)]
     if (verbose) {
-      message(paste("  Valid IC scores:", length(valid_ic)))
+      scice_message(paste("  Valid IC scores:", length(valid_ic)))
       if (length(valid_ic) > 0) {
-        message(paste("  IC score range: [", round(min(valid_ic), 4), ", ", round(max(valid_ic), 4), "]", sep = ""))
-        message(paste("  IC scores below threshold:", sum(valid_ic < ic_threshold)))
+        scice_message(paste("  IC score range: [", round(min(valid_ic), 4), ", ", round(max(valid_ic), 4), "]", sep = ""))
+        scice_message(paste("  IC scores below threshold:", sum(valid_ic < ic_threshold)))
       }
     }
     
@@ -293,52 +293,52 @@ scICE_clustering <- function(object,
     
     if (verbose) {
       total_time <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
-      message(paste(rep("=", 80), collapse = ""))
-      message("ANALYSIS COMPLETE")
-      message(paste("  Total execution time:", round(total_time, 3), "seconds"))
-      message(paste("  Found", length(results$consistent_clusters), 
+      scice_message(paste(rep("=", 80), collapse = ""))
+      scice_message("ANALYSIS COMPLETE")
+      scice_message(paste("  Total execution time:", round(total_time, 3), "seconds"))
+      scice_message(paste("  Found", length(results$consistent_clusters), 
                     "consistent cluster numbers:", paste(results$consistent_clusters, collapse = ", ")))
       
       # Report excluded clusters
       excluded_clusters <- setdiff(cluster_range, results$n_cluster)
       if (length(excluded_clusters) > 0) {
-        message(paste("  Excluded", length(excluded_clusters), "cluster numbers due to instability:", 
+        scice_message(paste("  Excluded", length(excluded_clusters), "cluster numbers due to instability:", 
                       paste(excluded_clusters, collapse = ", ")))
       }
       
       # Report tested but inconsistent clusters
       inconsistent_clusters <- setdiff(results$n_cluster, results$consistent_clusters)
       if (length(inconsistent_clusters) > 0) {
-        message(paste("  Found", length(inconsistent_clusters), "inconsistent cluster numbers:", 
+        scice_message(paste("  Found", length(inconsistent_clusters), "inconsistent cluster numbers:", 
                       paste(inconsistent_clusters, collapse = ", ")))
       }
       
       # Detailed breakdown
-      message("  Detailed breakdown:")
-      message(paste("    - Requested clusters:", length(cluster_range)))
-      message(paste("    - Excluded clusters:", length(excluded_clusters)))
-      message(paste("    - Tested clusters:", length(results$n_cluster)))
-      message(paste("    - Consistent clusters:", length(results$consistent_clusters)))
-      message(paste("    - Inconsistent clusters:", length(inconsistent_clusters)))
+      scice_message("  Detailed breakdown:")
+      scice_message(paste("    - Requested clusters:", length(cluster_range)))
+      scice_message(paste("    - Excluded clusters:", length(excluded_clusters)))
+      scice_message(paste("    - Tested clusters:", length(results$n_cluster)))
+      scice_message(paste("    - Consistent clusters:", length(results$consistent_clusters)))
+      scice_message(paste("    - Inconsistent clusters:", length(inconsistent_clusters)))
     }
   } else {
     results$consistent_clusters <- integer(0)
     if (verbose) {
       total_time <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
-      message(paste(rep("=", 80), collapse = ""))
-      message("ANALYSIS COMPLETE")
-      message(paste("  Total execution time:", round(total_time, 3), "seconds"))
-      message("  WARNING: No consistent cluster numbers found.")
-      message("  Possible reasons:")
-      message("    - All clusters were excluded during filtering")
-      message("    - IC threshold too strict")
-      message("    - Data quality issues")
-      message("    - Graph connectivity problems")
-      message("  Debugging suggestions:")
-      message("    - Try increasing ic_threshold (e.g., to Inf to see all results)")
-      message("    - Try increasing remove_threshold")
-      message("    - Check graph construction parameters")
-      message("    - Verify input data quality")
+      scice_message(paste(rep("=", 80), collapse = ""))
+      scice_message("ANALYSIS COMPLETE")
+      scice_message(paste("  Total execution time:", round(total_time, 3), "seconds"))
+      scice_message("  WARNING: No consistent cluster numbers found.")
+      scice_message("  Possible reasons:")
+      scice_message("    - All clusters were excluded during filtering")
+      scice_message("    - IC threshold too strict")
+      scice_message("    - Data quality issues")
+      scice_message("    - Graph connectivity problems")
+      scice_message("  Debugging suggestions:")
+      scice_message("    - Try increasing ic_threshold (e.g., to Inf to see all results)")
+      scice_message("    - Try increasing remove_threshold")
+      scice_message("    - Check graph construction parameters")
+      scice_message("    - Verify input data quality")
     }
   }
   

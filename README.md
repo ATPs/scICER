@@ -148,6 +148,22 @@ for (n in 3:15) {
 cowplot::plot_grid(plotlist = xl.fig, ncol = 3)
 ```
 
+### Background Runs and Verbose Logs
+
+`scICE_clustering(..., verbose = TRUE)` prints timestamped progress messages like
+`[YYYY-MM-DD HH:MM:SS] ...` via `message()`, which goes to `stderr`.
+If you launch jobs in the background and only capture `stdout`, logs can appear missing.
+
+Use:
+
+```bash
+Rscript run_scice.R > scice.log 2>&1 &
+tail -f scice.log
+```
+
+For very large input objects, `qs::qread()` can be silent for a while before scICER starts.
+The provided `run_scice.R` script prints timestamped checkpoints before and after `qread()` and clustering.
+
 ## Detailed Usage
 
 ### 1. Standard Analysis

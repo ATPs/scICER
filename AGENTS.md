@@ -48,3 +48,6 @@ Current history favors short, imperative commit messages such as `Update README.
 - Keep commit subjects concise and action-oriented; one logical change per commit.
 - PRs should include: purpose, key code paths changed, test evidence (`devtools::test()`/`devtools::check()`), and any user-visible behavior changes.
 - Link related issues and include updated examples/plots when visualization or output interpretation changes.
+
+## test
+put test code and file in folder `tests`.
