@@ -1403,17 +1403,46 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
 
   # Outer RESOLUTION_SEARCH workers should never exceed the number of targets.
   active_cluster_workers <- max(1L, min(n_cluster_targets, as.integer(search_worker_budget)))
-  preliminary_trial_workers <- if (in_parallel_context) {
+  preliminary_trial_worker_capacity <- if (in_parallel_context) {
     1L
   } else {
     max(1L, as.integer(floor(as.double(search_worker_budget) / active_cluster_workers)))
   }
-  preliminary_trial_workers <- min(preliminary_trial_workers, n_preliminary_trials)
-  preliminary_trial_workers <- cap_workers_by_memory(
-    preliminary_trial_workers,
+  preliminary_trial_worker_capacity <- min(preliminary_trial_worker_capacity, n_preliminary_trials)
+  preliminary_trial_worker_capacity <- cap_workers_by_memory(
+    preliminary_trial_worker_capacity,
     estimate_trial_matrix_bytes(n_vertices, 1L, 1L),
     runtime_context
   )
+
+  min_parallel_preliminary_workers <- getOption("scICER.internal_preliminary_parallel_min_workers", 3L)
+  if (!is.numeric(min_parallel_preliminary_workers) ||
+      length(min_parallel_preliminary_workers) != 1L ||
+      !is.finite(min_parallel_preliminary_workers) ||
+      min_parallel_preliminary_workers < 2) {
+    min_parallel_preliminary_workers <- 3L
+  } else {
+    min_parallel_preliminary_workers <- as.integer(round(min_parallel_preliminary_workers))
+  }
+  max_parallel_preliminary_workers <- getOption("scICER.internal_preliminary_parallel_max_workers", 4L)
+  if (!is.numeric(max_parallel_preliminary_workers) ||
+      length(max_parallel_preliminary_workers) != 1L ||
+      !is.finite(max_parallel_preliminary_workers) ||
+      max_parallel_preliminary_workers < min_parallel_preliminary_workers) {
+    max_parallel_preliminary_workers <- max(4L, min_parallel_preliminary_workers)
+  } else {
+    max_parallel_preliminary_workers <- as.integer(round(max_parallel_preliminary_workers))
+  }
+
+  use_parallel_preliminary_trials <- !in_parallel_context &&
+    preliminary_trial_worker_capacity >= min_parallel_preliminary_workers &&
+    n_preliminary_trials >= min_parallel_preliminary_workers
+
+  preliminary_trial_workers <- if (use_parallel_preliminary_trials) {
+    min(preliminary_trial_worker_capacity, n_preliminary_trials, max_parallel_preliminary_workers)
+  } else {
+    1L
+  }
   
   if (verbose) {
     scice_message(
@@ -1421,6 +1450,7 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
         "RESOLUTION_SEARCH: Worker allocation - requested:", as.integer(n_workers),
         "| budget after context/memory:", search_worker_budget,
         "| active cluster workers:", active_cluster_workers,
+        "| preliminary worker capacity per gamma:", preliminary_trial_worker_capacity,
         "| preliminary workers per gamma:", preliminary_trial_workers
       )
     )
@@ -1428,6 +1458,14 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
       paste(
         "RESOLUTION_SEARCH: Preliminary trial workers per gamma:",
         preliminary_trial_workers
+      )
+    )
+    scice_message(
+      paste(
+        "RESOLUTION_SEARCH: Preliminary trial mode:",
+        if (preliminary_trial_workers > 1L) "parallel" else "serial",
+        "(parallel requires worker capacity >=",
+        min_parallel_preliminary_workers, ")"
       )
     )
     scice_message(

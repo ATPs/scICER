@@ -287,7 +287,9 @@ Based on graph size (`vcount`):
 
 - `run_preliminary_trials()`
   - runs up to `n_preliminary_trials` per gamma,
-  - supports parallel trial launch and early stop,
+  - supports adaptive trial launch mode:
+    - serial mode when per-target worker capacity is small,
+    - parallel mode only when capacity crosses an internal threshold,
   - emits heartbeat with running trials.
 - Each trial uses `run_single_trial_count()`:
   - calls `cached_leiden_clustering()`,
@@ -451,6 +453,13 @@ Optimization-stage worker allocation details:
 - recomputes per-cluster budget and enforces `outer_workers * per_cluster_budget <= total_budget`,
 - runs outer `k` loop with dynamic queue (`mc.preschedule = FALSE`).
 
+Resolution-search preliminary trial allocation details:
+
+- computes per-target worker capacity from global search budget and active outer `k` workers,
+- uses serial preliminary trials by default for low per-target capacity,
+- enables parallel preliminary trials only when capacity reaches the internal minimum threshold,
+- caps parallel preliminary workers by an internal upper bound to limit `mcparallel/mccollect` overhead.
+
 ## 7. Runtime and Scaling Characteristics
 
 ### 7.1 Major cost drivers
@@ -520,6 +529,8 @@ The code reads several internal R options:
 - `scICER.internal_heartbeat_seconds`
 - `scICER.internal_memory_budget_bytes`
 - `scICER.internal_worker_memory_overhead`
+- `scICER.internal_preliminary_parallel_min_workers`
+- `scICER.internal_preliminary_parallel_max_workers`
 - `scICER.internal_force_spill`
 - `scICER.internal_spill_threshold_bytes`
 - `scICER.internal_spill_dir`

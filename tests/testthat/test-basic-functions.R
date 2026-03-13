@@ -623,3 +623,29 @@ test_that("parallel preliminary trials avoid launching all trials after early hi
   expect_true(length(start_lines) >= 2L)
   expect_lte(length(start_lines), 4L)
 })
+
+test_that("find_resolution_ranges uses serial preliminary trials when per-target worker capacity is low", {
+  skip_on_os("windows")
+
+  ig <- igraph::make_ring(8)
+  captured_messages <- character()
+  withCallingHandlers(
+    scICER:::find_resolution_ranges(
+      igraph_obj = ig,
+      cluster_range = 1:4,
+      start_g = 0,
+      end_g = 0.2,
+      objective_function = "modularity",
+      resolution_tolerance = 1.0,
+      n_workers = 8,
+      verbose = TRUE
+    ),
+    message = function(m) {
+      captured_messages <<- c(captured_messages, conditionMessage(m))
+      invokeRestart("muffleMessage")
+    }
+  )
+
+  expect_true(any(grepl("Preliminary trial mode: serial", captured_messages, fixed = TRUE)))
+  expect_true(any(grepl("Preliminary trial workers per gamma: 1", captured_messages, fixed = TRUE)))
+})
