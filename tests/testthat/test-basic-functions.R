@@ -105,3 +105,61 @@ test_that("calculate_ecs scalar mode is stable for large inputs", {
   expect_true(is.finite(scalar_score))
   expect_true(scalar_score >= 0 && scalar_score <= 1)
 })
+
+test_that("get_robust_labels requires explicit Seurat object for return_seurat", {
+  data("pbmc_small", package = "SeuratObject")
+
+  results <- scICE_clustering(
+    object = pbmc_small,
+    graph_name = "RNA_snn",
+    cluster_range = 2:3,
+    n_workers = 1,
+    n_trials = 2,
+    n_bootstrap = 2,
+    seed = 123,
+    remove_threshold = Inf,
+    verbose = FALSE
+  )
+
+  expect_error(
+    get_robust_labels(results, return_seurat = TRUE),
+    "please provide `object`"
+  )
+
+  seurat_with_labels <- get_robust_labels(
+    results,
+    threshold = Inf,
+    return_seurat = TRUE,
+    object = pbmc_small
+  )
+  expect_s4_class(seurat_with_labels, "Seurat")
+  expect_true(any(grepl("^clusters_", colnames(seurat_with_labels@meta.data))))
+
+  smaller_object <- subset(pbmc_small, cells = SeuratObject::Cells(pbmc_small)[1:40])
+  expect_error(
+    get_robust_labels(results, threshold = Inf, return_seurat = TRUE, object = smaller_object),
+    "Cell count mismatch"
+  )
+})
+
+test_that("get_robust_labels keeps backward compatibility for old results", {
+  data("pbmc_small", package = "SeuratObject")
+
+  results <- scICE_clustering(
+    object = pbmc_small,
+    graph_name = "RNA_snn",
+    cluster_range = 2:3,
+    n_workers = 1,
+    n_trials = 2,
+    n_bootstrap = 2,
+    seed = 123,
+    remove_threshold = Inf,
+    verbose = FALSE
+  )
+  results$seurat_object <- pbmc_small
+
+  expect_warning(
+    get_robust_labels(results, threshold = Inf, return_seurat = TRUE),
+    "deprecated"
+  )
+})

@@ -199,7 +199,12 @@ Integrate scICER results directly into your Seurat workflow:
 
 ```{r add_to_seurat}
 # Add consistent clustering results to Seurat object
-seurat_obj <- get_robust_labels(scice_results, return_seurat = TRUE, threshold = 1.01)
+seurat_obj <- get_robust_labels(
+  scice_results,
+  return_seurat = TRUE,
+  threshold = 1.01,
+  object = seurat_obj
+)
 
 # Check what was added
 new_columns <- grep("clusters_", names(seurat_obj@meta.data), value = TRUE)

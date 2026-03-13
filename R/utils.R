@@ -360,7 +360,7 @@ create_results_summary <- function(scice_results, threshold = 1.005) {
               "  plot_stability(results)",
               "",
               "To extract clustering labels:",
-              "  seurat_obj <- get_robust_labels(results, return_seurat = TRUE)",
+              "  seurat_obj <- get_robust_labels(results, return_seurat = TRUE, object = seurat_obj)",
               "=====================================")
   
   return(summary)

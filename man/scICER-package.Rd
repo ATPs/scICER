@@ -72,7 +72,7 @@ plot_ic(results)
 plot_stability(results)
 
 # Extract consistent clusters
-seurat_obj <- get_robust_labels(results, return_seurat = TRUE)
+seurat_obj <- get_robust_labels(results, return_seurat = TRUE, object = seurat_obj)
 
 # Continue with Seurat workflow
 DimPlot(seurat_obj, group.by = "clusters_8")
@@ -150,7 +150,7 @@ consistent_clusters <- extract_consistent_clusters(results)
 print(consistent_clusters)
 
 # Add to Seurat object
-pbmc_small <- get_robust_labels(results, return_seurat = TRUE)
+pbmc_small <- get_robust_labels(results, return_seurat = TRUE, object = pbmc_small)
 
 # View help for main functions
 ?scICE_clustering

@@ -135,7 +135,7 @@ scice_results <- scICE_clustering(
 plot_ic(scice_results, threshold = 1.005)
 
 # Extract consistent clustering labels
-seurat_obj <- get_robust_labels(scice_results, return_seurat = TRUE)
+seurat_obj <- get_robust_labels(scice_results, return_seurat = TRUE, object = seurat_obj)
 
 # Visualize with consistent clusters, cluster range from 3 to 15
 xl.fig <- list()
@@ -223,7 +223,7 @@ print(summary)
 labels_df <- get_robust_labels(results)
 
 # Add results directly to Seurat object
-seurat_obj <- get_robust_labels(results, return_seurat = TRUE)
+seurat_obj <- get_robust_labels(results, return_seurat = TRUE, object = seurat_obj)
 ```
 
 ### 4. Integration with Seurat Workflow
@@ -245,7 +245,7 @@ scice_results <- scICE_clustering(
 )
 
 # Add consistent clusters to Seurat object
-seurat_obj <- get_robust_labels(scice_results, return_seurat = TRUE)
+seurat_obj <- get_robust_labels(scice_results, return_seurat = TRUE, object = seurat_obj)
 
 # Continue with standard Seurat analysis
 seurat_obj <- RunUMAP(seurat_obj, dims = 1:20)
@@ -479,7 +479,7 @@ scice_results <- scICE_clustering(
 
 # Step 5: Visualization and analysis
 plot_ic(scice_results, threshold = 1.005)
-seurat_obj <- get_robust_labels(scice_results, return_seurat = TRUE)
+seurat_obj <- get_robust_labels(scice_results, return_seurat = TRUE, object = seurat_obj)
 
 # Step 6: Final UMAP with scLENS
 seurat_obj <- RunUMAP(seurat_obj, 
@@ -531,6 +531,14 @@ The `scICE_clustering()` function returns a list containing:
 - `best_labels`: Best clustering labels for each cluster number
 - `consistent_clusters`: Cluster numbers meeting consistency threshold
 - `mei`: Mutual Element-wise Information scores
+
+`scICE_clustering()` returns a lightweight results object and does not store the full
+Seurat input object. When you need metadata columns added back, pass the original
+Seurat object explicitly:
+
+```r
+seurat_obj <- get_robust_labels(results, return_seurat = TRUE, object = seurat_obj)
+```
 
 ### Interpretation Guidelines
 

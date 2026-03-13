@@ -364,8 +364,7 @@ scICE_clustering <- function(object,
     }
   }
   
-  # Add object reference for downstream analysis
-  results$seurat_object <- object
+  # Keep lightweight result object (do not store full Seurat object)
   results$graph_name <- graph_name
   
   class(results) <- "scICE"

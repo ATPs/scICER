@@ -4,7 +4,12 @@
 \alias{get_robust_labels}
 \title{Extract robust clustering labels from scICE results}
 \usage{
-get_robust_labels(scice_results, threshold = 1.005, return_seurat = FALSE)
+get_robust_labels(
+  scice_results,
+  threshold = 1.005,
+  return_seurat = FALSE,
+  object = NULL
+)
 }
 \arguments{
 \item{scice_results}{Results object from scICE_clustering function}
@@ -12,6 +17,9 @@ get_robust_labels(scice_results, threshold = 1.005, return_seurat = FALSE)
 \item{threshold}{IC threshold for determining consistent clusters (default: 1.005)}
 
 \item{return_seurat}{Whether to return results as Seurat metadata (default: FALSE)}
+
+\item{object}{Optional Seurat object used when \code{return_seurat = TRUE}.
+Pass the original input Seurat object from \code{scICE_clustering()}.}
 }
 \value{
 Data frame with cell names and cluster assignments, or Seurat object with updated metadata
@@ -30,7 +38,9 @@ Output columns are:
 }
 
 If \code{return_seurat = TRUE}, these \code{clusters_<k>} columns are added to
-\code{meta.data} of the stored Seurat object in \code{scice_results}.
+\code{meta.data} of \code{object}. The function validates that
+\code{scice_results$cell_names} and \code{Cells(object)} refer to the same cells.
+Cell order differences are handled by cell-name matching.
 }
 \examples{
 \dontrun{
@@ -41,6 +51,6 @@ consistent_labels <- get_robust_labels(scice_results, threshold = 1.005)
 head(consistent_labels)
 
 # Add to Seurat object directly
-seurat_obj <- get_robust_labels(scice_results, return_seurat = TRUE)
+seurat_obj <- get_robust_labels(scice_results, return_seurat = TRUE, object = seurat_obj)
 }
 }

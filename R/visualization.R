@@ -174,11 +174,15 @@ plot_ic <- function(scice_results, threshold = 1.005, figure_size = c(10, 6),
 #' }
 #'
 #' If \code{return_seurat = TRUE}, these \code{clusters_<k>} columns are added to
-#' \code{meta.data} of the stored Seurat object in \code{scice_results}.
+#' \code{meta.data} of \code{object}. The function validates that
+#' \code{scice_results$cell_names} and \code{Cells(object)} refer to the same cells.
+#' Cell order differences are handled by cell-name matching.
 #'
 #' @param scice_results Results object from scICE_clustering function
 #' @param threshold IC threshold for determining consistent clusters (default: 1.005)
 #' @param return_seurat Whether to return results as Seurat metadata (default: FALSE)
+#' @param object Optional Seurat object used when \code{return_seurat = TRUE}.
+#'   Pass the original input Seurat object from \code{scICE_clustering()}.
 #'
 #' @return Data frame with cell names and cluster assignments, or Seurat object with updated metadata
 #' @export
@@ -191,9 +195,9 @@ plot_ic <- function(scice_results, threshold = 1.005, figure_size = c(10, 6),
 #' head(consistent_labels)
 #' 
 #' # Add to Seurat object directly
-#' seurat_obj <- get_robust_labels(scice_results, return_seurat = TRUE)
+#' seurat_obj <- get_robust_labels(scice_results, return_seurat = TRUE, object = seurat_obj)
 #' }
-get_robust_labels <- function(scice_results, threshold = 1.005, return_seurat = FALSE) {
+get_robust_labels <- function(scice_results, threshold = 1.005, return_seurat = FALSE, object = NULL) {
   
   if (!inherits(scice_results, "scICE")) {
     stop("Input must be a scICE results object")
@@ -261,17 +265,50 @@ get_robust_labels <- function(scice_results, threshold = 1.005, return_seurat = 
   }
   
   if (return_seurat) {
-    if (is.null(scice_results$seurat_object)) {
-      warning("No Seurat object found in scICE results. Returning data frame instead.")
-      return(output_df)
+    seurat_obj <- object
+    
+    if (is.null(seurat_obj)) {
+      if (!is.null(scice_results$seurat_object)) {
+        warning(
+          "`return_seurat = TRUE` without `object` is deprecated. ",
+          "Using `scice_results$seurat_object` for backward compatibility."
+        )
+        seurat_obj <- scice_results$seurat_object
+      } else {
+        stop("When `return_seurat = TRUE`, please provide `object` (the original Seurat object).")
+      }
     }
     
-    # Add metadata to Seurat object
-    seurat_obj <- scice_results$seurat_object
+    if (!inherits(seurat_obj, "Seurat")) {
+      stop("`object` must be a Seurat object when `return_seurat = TRUE`.")
+    }
+    
+    if (is.null(scice_results$cell_names) || length(scice_results$cell_names) == 0) {
+      stop("`scice_results$cell_names` is missing. Cannot map labels back to Seurat metadata.")
+    }
+    
+    result_cells <- as.character(scice_results$cell_names)
+    object_cells <- SeuratObject::Cells(seurat_obj)
+    
+    if (length(object_cells) != length(result_cells)) {
+      stop(
+        "Cell count mismatch between `object` (", length(object_cells),
+        ") and `scice_results` (", length(result_cells), ")."
+      )
+    }
+    
+    if (!setequal(object_cells, result_cells)) {
+      stop("Cell identifiers in `object` and `scice_results$cell_names` do not match.")
+    }
     
     for (i in 2:ncol(output_df)) {
       col_name <- names(output_df)[i]
-      seurat_obj@meta.data[[col_name]] <- output_df[[i]]
+      label_map <- stats::setNames(output_df[[i]], output_df$cell_id)
+      aligned_values <- unname(label_map[object_cells])
+      if (any(is.na(aligned_values))) {
+        stop("Failed to align cluster labels to Seurat metadata for column: ", col_name)
+      }
+      seurat_obj@meta.data[[col_name]] <- aligned_values
     }
     
     return(seurat_obj)
