@@ -284,6 +284,72 @@ cross_platform_mclapply <- function(X, FUN, mc.cores = 1, ...) {
   }
 }
 
+#' Resolve heartbeat interval for verbose progress logging
+#'
+#' @description
+#' Returns heartbeat interval in seconds for periodic liveness logs.
+#'
+#' @param default_seconds Fallback interval in seconds
+#' @return Positive numeric scalar
+#' @keywords internal
+get_heartbeat_interval_seconds <- function(default_seconds = 60) {
+  configured <- getOption("scICER.internal_heartbeat_seconds", default_seconds)
+  if (!is.numeric(configured) || length(configured) != 1 || !is.finite(configured) || configured <= 0) {
+    return(as.double(default_seconds))
+  }
+  as.double(configured)
+}
+
+#' Create a throttled heartbeat logger
+#'
+#' @description
+#' Builds a closure that emits at most one progress message per interval.
+#'
+#' @param verbose Whether logging is enabled
+#' @param context Optional message prefix
+#' @param interval_seconds Optional heartbeat interval override
+#' @return Function accepting a message string or message-producing function
+#' @keywords internal
+create_heartbeat_logger <- function(verbose, context = "", interval_seconds = NULL) {
+  enabled <- isTRUE(verbose)
+  interval <- if (is.null(interval_seconds)) {
+    get_heartbeat_interval_seconds()
+  } else {
+    as.double(interval_seconds)
+  }
+  if (!is.finite(interval) || interval <= 0) {
+    interval <- 60
+  }
+
+  context <- if (is.null(context) || !nzchar(as.character(context)[1])) "" else as.character(context)[1]
+  state <- new.env(parent = emptyenv())
+  state$last_emit <- Sys.time()
+
+  function(message_text) {
+    if (!enabled) {
+      return(invisible(FALSE))
+    }
+
+    now <- Sys.time()
+    elapsed <- as.numeric(difftime(now, state$last_emit, units = "secs"))
+    if (!is.finite(elapsed) || elapsed < interval) {
+      return(invisible(FALSE))
+    }
+    state$last_emit <- now
+
+    if (is.function(message_text)) {
+      message_text <- message_text()
+    }
+    if (!is.character(message_text) || length(message_text) == 0 || is.na(message_text[1])) {
+      message_text <- "progress update"
+    }
+
+    prefix <- if (nzchar(context)) paste0(context, " ") else ""
+    scice_message(paste0(prefix, "HEARTBEAT (", as.integer(round(interval)), "s): ", message_text[1]))
+    invisible(TRUE)
+  }
+}
+
 #' Estimate clustering matrix memory footprint
 #'
 #' @description
@@ -770,9 +836,23 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   } else {
     # Windows compatibility for parallel processing
     actual_workers <- if (.Platform$OS.type == "windows" && n_workers > 1) 1 else n_workers
+    active_filter_workers <- max(1L, min(as.integer(length(cluster_range)), as.integer(actual_workers)))
+    filter_gamma_workers <- max(1L, as.integer(floor(as.double(actual_workers) / active_filter_workers)))
+    filter_gamma_workers <- cap_workers_by_memory(
+      filter_gamma_workers,
+      estimate_trial_matrix_bytes(igraph::vcount(igraph_obj), 10L, 1L),
+      runtime_context
+    )
     
     if (verbose) {
       scice_message(paste("CLUSTERING_MAIN: Using", actual_workers, "workers for filtering (requested:", n_workers, ")"))
+      scice_message(
+        paste(
+          "CLUSTERING_MAIN: Filtering worker layout -",
+          active_filter_workers, "cluster workers x",
+          filter_gamma_workers, "gamma workers"
+        )
+      )
       if (in_parallel_context) {
         scice_message("CLUSTERING_MAIN: Running in parallel context - using 1 worker for nested operations")
       }
@@ -789,9 +869,9 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
       
       # Test multiple gammas in parallel (distribute workers efficiently when in parallel context)
       nested_workers <- if (in_parallel_context) {
-        max(1, as.integer(round(actual_workers / length(cluster_range))))
+        max(1L, as.integer(round(actual_workers / max(1L, length(cluster_range)))))
       } else {
-        actual_workers
+        filter_gamma_workers
       }
       nested_workers <- cap_workers_by_memory(
         nested_workers,
@@ -942,6 +1022,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   
   # Windows compatibility for clustering optimization
   actual_workers_opt <- if (.Platform$OS.type == "windows" && n_workers > 1) 1 else n_workers
+  per_cluster_worker_budget <- 1L
 
   if (length(valid_clusters) > 0) {
     n_vertices <- igraph::vcount(igraph_obj)
@@ -962,6 +1043,13 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
       n_gamma = gamma_steps_estimates
     ))
     actual_workers_opt <- cap_workers_by_memory(actual_workers_opt, max_cluster_bytes, runtime_context)
+    active_cluster_workers_opt <- max(1L, min(as.integer(length(valid_clusters)), as.integer(actual_workers_opt)))
+    per_cluster_worker_budget <- max(1L, as.integer(floor(as.double(actual_workers_opt) / active_cluster_workers_opt)))
+    per_cluster_worker_budget <- cap_workers_by_memory(
+      per_cluster_worker_budget,
+      estimate_trial_matrix_bytes(n_vertices, n_trials, 1L),
+      runtime_context
+    )
 
     if (should_enable_spill(runtime_context, max_cluster_bytes)) {
       activate_runtime_spill(runtime_context, estimated_bytes = max_cluster_bytes)
@@ -970,6 +1058,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   
   if (verbose) {
     scice_message(paste("CLUSTERING_MAIN: Using", actual_workers_opt, "workers for optimization"))
+    scice_message(paste("CLUSTERING_MAIN: Per-cluster worker budget:", per_cluster_worker_budget))
     scice_message(paste("CLUSTERING_MAIN: Progress tracking:"))
     progress_start_time <- Sys.time()
     
@@ -1009,7 +1098,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
     result <- optimize_clustering(
       igraph_obj, cluster_num, gamma_range, objective_function,
       n_trials, n_bootstrap, seed, beta, n_iterations, max_iterations,
-      resolution_tolerance, n_workers, snn_graph, min_cluster_size, verbose,
+      resolution_tolerance, per_cluster_worker_budget, snn_graph, min_cluster_size, verbose,
       worker_id, in_parallel_context = TRUE,
       runtime_context = runtime_context
     )
@@ -1249,27 +1338,30 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
   }
   
   # Process cluster numbers in parallel (with Windows compatibility)
-  if (.Platform$OS.type == "windows" && n_workers > 1) {
-    n_workers <- 1  # Force single worker on Windows
+  requested_search_workers <- max(1L, as.integer(n_workers))
+  if (.Platform$OS.type == "windows" && requested_search_workers > 1L) {
+    requested_search_workers <- 1L  # Force single worker on Windows
   }
-  
-  # Use distributed workers if already in parallel context to maximize efficiency
-  nested_workers <- if (in_parallel_context) {
-    max(1, as.integer(round(n_workers / length(cluster_range))))
+
+  n_cluster_targets <- max(1L, as.integer(length(cluster_range)))
+  # In nested context, split the provided budget across cluster targets.
+  search_worker_budget <- if (in_parallel_context) {
+    max(1L, as.integer(round(as.double(requested_search_workers) / n_cluster_targets)))
   } else {
-    n_workers
+    requested_search_workers
   }
-  nested_workers <- cap_workers_by_memory(
-    nested_workers,
+  search_worker_budget <- cap_workers_by_memory(
+    search_worker_budget,
     estimate_trial_matrix_bytes(n_vertices, n_preliminary_trials, 1L),
     runtime_context
   )
 
-  active_cluster_workers <- max(1L, min(as.integer(length(cluster_range)), nested_workers))
+  # Outer RESOLUTION_SEARCH workers should never exceed the number of targets.
+  active_cluster_workers <- max(1L, min(n_cluster_targets, as.integer(search_worker_budget)))
   preliminary_trial_workers <- if (in_parallel_context) {
     1L
   } else {
-    max(1L, as.integer(floor(max(1L, as.integer(n_workers)) / active_cluster_workers)))
+    max(1L, as.integer(floor(as.double(search_worker_budget) / active_cluster_workers)))
   }
   preliminary_trial_workers <- min(preliminary_trial_workers, n_preliminary_trials)
   preliminary_trial_workers <- cap_workers_by_memory(
@@ -1278,11 +1370,15 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
     runtime_context
   )
   
-  if (verbose && in_parallel_context) {
-    scice_message(paste("RESOLUTION_SEARCH: Nested worker optimization - using", nested_workers, 
-                 "workers per cluster ( ", n_workers, "total /", length(cluster_range), "clusters)"))
-  }
   if (verbose) {
+    scice_message(
+      paste(
+        "RESOLUTION_SEARCH: Worker allocation - requested:", as.integer(n_workers),
+        "| budget after context/memory:", search_worker_budget,
+        "| active cluster workers:", active_cluster_workers,
+        "| preliminary workers per gamma:", preliminary_trial_workers
+      )
+    )
     scice_message(
       paste(
         "RESOLUTION_SEARCH: Preliminary trial workers per gamma:",
@@ -1301,6 +1397,10 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
     fallback_count <- 0L
     early_stop_saved_trials <- 0L
     trial_steps <- 0L
+    heartbeat <- create_heartbeat_logger(
+      verbose = verbose,
+      context = paste("RESOLUTION_SEARCH: k =", target_clusters)
+    )
     
     derive_trial_seed <- function(seed_base, trial_idx) {
       if (is.null(seed_base)) {
@@ -1347,9 +1447,21 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
       launched_trials <- 0L
       completed_trials <- 0L
       killed_trials <- 0L
+      heartbeat(function() {
+        paste(
+          phase_label, "step", iteration_idx,
+          "- preliminary trials started for gamma", signif(gamma_val, 6)
+        )
+      })
       
       if (.Platform$OS.type == "windows" || preliminary_trial_workers <= 1L) {
         for (trial_idx in seq_len(n_preliminary_trials)) {
+          heartbeat(function() {
+            paste(
+              phase_label, "step", iteration_idx,
+              "- running preliminary trial", trial_idx, "/", n_preliminary_trials
+            )
+          })
           launched_trials <- launched_trials + 1L
           n_clusters <- run_single_trial_count(
             trial_idx = trial_idx,
@@ -1361,6 +1473,12 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
           )
           trial_counts <- c(trial_counts, n_clusters)
           completed_trials <- completed_trials + 1L
+          heartbeat(function() {
+            paste(
+              phase_label, "step", iteration_idx,
+              "- preliminary trials", completed_trials, "/", n_preliminary_trials
+            )
+          })
           if (n_clusters == target_clusters) {
             early_stop <- TRUE
             early_trial_idx <- trial_idx
@@ -1403,6 +1521,13 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
         while (!early_stop && length(active_jobs) > 0L) {
           ready <- parallel::mccollect(active_jobs, wait = FALSE, timeout = 0.05)
           if (is.null(ready) || length(ready) == 0L) {
+            heartbeat(function() {
+              paste(
+                phase_label, "step", iteration_idx,
+                "- waiting preliminary trials; completed", completed_trials, "/", n_preliminary_trials,
+                "- active jobs", length(active_jobs)
+              )
+            })
             next
           }
           
@@ -1554,6 +1679,13 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
       iteration_count <- iteration_count + 1
       mid <- (left + right) / 2
       gamma_val <- if (objective_function == "modularity") mid else exp(mid)
+      heartbeat(function() {
+        paste(
+          "lower-bound loop iteration", iteration_count, "/", max_iterations,
+          "- gamma", signif(gamma_val, 6),
+          "- current interval [", signif(left, 6), ",", signif(right, 6), "]"
+        )
+      })
       
       # Test clustering with current gamma using vectorized operations
       # Set deterministic seed for lower bound search if base seed provided
@@ -1621,6 +1753,13 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
       iteration_count <- iteration_count + 1
       mid <- (left + right) / 2
       gamma_val <- if (objective_function == "modularity") mid else exp(mid)
+      heartbeat(function() {
+        paste(
+          "upper-bound loop iteration", iteration_count, "/", max_iterations,
+          "- gamma", signif(gamma_val, 6),
+          "- current interval [", signif(left, 6), ",", signif(right, 6), "]"
+        )
+      })
       
       # Test clustering with current gamma using vectorized operations
       # Set deterministic seed for upper bound search if base seed provided
@@ -1726,7 +1865,7 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
       left_bound = if (objective_function == "CPM") exp(left_bound) else left_bound,
       right_bound = if (objective_function == "CPM") exp(right_bound) else right_bound
     )
-  }, mc.cores = nested_workers)
+  }, mc.cores = active_cluster_workers)
   
   # Combine results
   # Filter out NULL results from parallel processing
@@ -1864,6 +2003,7 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
   }
   
   n_vertices <- igraph::vcount(igraph_obj)
+  heartbeat <- create_heartbeat_logger(verbose = verbose, context = worker_id)
   range_width <- abs(gamma_range[2] - gamma_range[1])
   n_steps <- if (n_vertices >= 200000 && range_width <= max(resolution_tolerance * 10, .Machine$double.eps)) 5L else 11L
   delta_n <- 2
@@ -1906,6 +2046,10 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
       scice_message(paste(worker_id, ":   ... and", length(gamma_sequence) - 5, "more"))
     }
   }
+  if (verbose) {
+    phase1_runs <- as.integer(length(gamma_sequence) * max(1L, as.integer(n_trials)))
+    scice_message(paste(worker_id, ": Phase 1 expected Leiden runs:", format(phase1_runs, big.mark = ",")))
+  }
 
   estimated_phase1_bytes <- estimate_trial_matrix_bytes(n_vertices, n_trials, length(gamma_sequence))
   if (should_enable_spill(runtime_context, estimated_phase1_bytes)) {
@@ -1921,11 +2065,10 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
     }
   }
   
-  # Use distributed workers if already in parallel context to maximize efficiency
-  nested_workers <- if (in_parallel_context) {
-    max(1, as.integer(round(n_workers / length(gamma_sequence))))
-  } else {
-    n_workers
+  # In parallel context, n_workers is already the per-cluster budget.
+  nested_workers <- max(1L, as.integer(n_workers))
+  if (!in_parallel_context) {
+    nested_workers <- min(nested_workers, max(1L, as.integer(length(gamma_sequence))))
   }
   nested_workers <- cap_workers_by_memory(
     nested_workers,
@@ -1933,12 +2076,33 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
     runtime_context
   )
   
-  if (verbose && in_parallel_context) {
-    scice_message(paste(worker_id, ": Nested worker optimization - using", nested_workers, 
-                 "workers per gamma ( ", n_workers, "total /", length(gamma_sequence), "gammas)"))
+  if (verbose) {
+    scice_message(
+      paste(
+        worker_id, ": Worker budget for this cluster:", n_workers,
+        "- using", nested_workers, "workers for Phase 1 gamma evaluation"
+      )
+    )
+  }
+  
+  phase1_log_every <- max(1L, as.integer(floor(length(gamma_sequence) / 5)))
+  should_log_phase1_step <- function(idx) {
+    idx == 1L || idx == length(gamma_sequence) || (idx %% phase1_log_every) == 0L
   }
   
   evaluate_gamma <- function(gamma_val, gamma_idx) {
+    log_this_gamma <- verbose && should_log_phase1_step(gamma_idx)
+    gamma_start_time <- NULL
+    if (log_this_gamma) {
+      gamma_start_time <- Sys.time()
+      scice_message(
+        paste(
+          worker_id, ": Phase 1 progress gamma", gamma_idx, "/", length(gamma_sequence),
+          "started (gamma =", signif(gamma_val, 6), ")"
+        )
+      )
+    }
+
     if (!is.null(seed)) {
       gamma_component <- if (is.finite(gamma_val)) {
         as.integer(floor(abs(gamma_val * 10000) %% 100000))
@@ -1952,17 +2116,34 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
       set.seed(gamma_seed)
     }
 
-    cluster_matrix <- replicate(
-      n_trials,
-      run_leiden_trial(gamma_val, n_iterations),
-      simplify = TRUE
-    )
+    cluster_matrix <- matrix(0L, nrow = n_vertices, ncol = n_trials)
+    for (trial_idx in seq_len(n_trials)) {
+      cluster_matrix[, trial_idx] <- run_leiden_trial(gamma_val, n_iterations)
+      heartbeat(function() {
+        paste(
+          "phase1 running - gamma", gamma_idx, "/", length(gamma_sequence),
+          "- trial", trial_idx, "/", n_trials,
+          "- target k =", target_clusters
+        )
+      })
+    }
 
     n_clusters_vec <- apply(cluster_matrix, 2, function(x) length(unique(x)))
     mean_clusters <- stats::median(n_clusters_vec)
 
     if (mean_clusters != target_clusters) {
       rm(cluster_matrix)
+      if (log_this_gamma) {
+        gamma_elapsed <- as.numeric(difftime(Sys.time(), gamma_start_time, units = "secs"))
+        scice_message(
+          paste(
+            worker_id, ": Phase 1 progress gamma", gamma_idx, "/", length(gamma_sequence),
+            "completed in", round(gamma_elapsed, 3), "seconds",
+            "- median clusters =", mean_clusters,
+            "(target =", target_clusters, "; IC skipped)"
+          )
+        )
+      }
       return(list(
         valid = FALSE,
         gamma = gamma_val,
@@ -1981,6 +2162,18 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
       prefix = sprintf("k%d_g%03d", target_clusters, gamma_idx)
     )
     rm(cluster_matrix)
+    
+    if (log_this_gamma) {
+      gamma_elapsed <- as.numeric(difftime(Sys.time(), gamma_start_time, units = "secs"))
+      scice_message(
+        paste(
+          worker_id, ": Phase 1 progress gamma", gamma_idx, "/", length(gamma_sequence),
+          "completed in", round(gamma_elapsed, 3), "seconds",
+          "- median clusters =", mean_clusters,
+          "- IC =", round(ic_score, 4)
+        )
+      )
+    }
 
     list(
       valid = TRUE,
@@ -1993,30 +2186,15 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
 
   if (nested_workers == 1) {
     gamma_results <- vector("list", length(gamma_sequence))
-    phase1_log_every <- max(1L, as.integer(floor(length(gamma_sequence) / 5)))
     
     for (gamma_idx in seq_along(gamma_sequence)) {
       gamma_val <- gamma_sequence[gamma_idx]
       gamma_results[[gamma_idx]] <- evaluate_gamma(gamma_val, gamma_idx)
-      mean_clusters <- gamma_results[[gamma_idx]]$mean_clusters
-      
-      if (verbose && (gamma_idx == 1 || gamma_idx %% phase1_log_every == 0 || gamma_idx == length(gamma_sequence))) {
-        scice_message(
-          paste(
-            worker_id, ": Phase 1 progress", gamma_idx, "/", length(gamma_sequence),
-            "- gamma =", signif(gamma_val, 6), "- median clusters =", mean_clusters
-          )
-        )
-      }
     }
   } else {
     gamma_results <- cross_platform_mclapply(seq_along(gamma_sequence), function(gamma_idx) {
       gamma_val <- gamma_sequence[gamma_idx]
-      result <- evaluate_gamma(gamma_val, gamma_idx)
-      if (verbose && length(gamma_sequence) <= 5) {
-        scice_message(paste(worker_id, ":   gamma =", signif(gamma_val, 6), "-> median clusters =", result$mean_clusters))
-      }
-      result
+      evaluate_gamma(gamma_val, gamma_idx)
     }, mc.cores = nested_workers)
   }
   
@@ -2123,10 +2301,18 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
           set.seed(iter_seed)
         }
         
-        new_clustering <- replicate(n_trials, {
+        new_clustering <- matrix(0L, nrow = n_vertices, ncol = n_trials)
+        for (trial_idx in seq_len(n_trials)) {
           init_membership <- current_matrix[, sample.int(ncol(current_matrix), 1)]
-          run_leiden_trial(gamma_val, delta_n, init_membership)
-        }, simplify = TRUE)
+          new_clustering[, trial_idx] <- run_leiden_trial(gamma_val, delta_n, init_membership)
+          heartbeat(function() {
+            paste(
+              "phase4 running - k iteration", k,
+              "- gamma", i, "/", length(current_gammas),
+              "- trial", trial_idx, "/", n_trials
+            )
+          })
+        }
         
         # Calculate IC score
         extracted <- extract_clustering_array(new_clustering)
@@ -2254,10 +2440,13 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
     estimate_trial_matrix_bytes(n_vertices, n_trials, 1L),
     runtime_context
   )
+  bootstrap_log_every <- max(1L, as.integer(floor(n_bootstrap / 5)))
+  should_log_bootstrap_step <- function(idx) {
+    idx == 1L || idx == n_bootstrap || (idx %% bootstrap_log_every) == 0L
+  }
   
   if (bootstrap_workers == 1) {
     ic_bootstrap <- numeric(n_bootstrap)
-    phase5_log_every <- max(1L, as.integer(floor(n_bootstrap / 5)))
     
     for (i in seq_len(n_bootstrap)) {
       # Set deterministic seed for this bootstrap iteration if base seed provided
@@ -2271,8 +2460,14 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
       extracted <- extract_clustering_array(bootstrap_matrix)
       ic_result <- calculate_ic_from_extracted(extracted)
       ic_bootstrap[i] <- 1 / ic_result
+      heartbeat(function() {
+        paste(
+          "phase5 running - bootstrap", i, "/", n_bootstrap,
+          "- latest IC =", round(ic_bootstrap[i], 4)
+        )
+      })
       
-      if (verbose && (i == 1 || i %% phase5_log_every == 0 || i == n_bootstrap)) {
+      if (verbose && should_log_bootstrap_step(i)) {
         scice_message(paste(worker_id, ": Phase 5 progress", i, "/", n_bootstrap, "- IC =", round(ic_bootstrap[i], 4)))
       }
     }
@@ -2288,7 +2483,11 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
       bootstrap_matrix <- best_clustering[, sample_indices, drop = FALSE]
       extracted <- extract_clustering_array(bootstrap_matrix)
       ic_result <- calculate_ic_from_extracted(extracted)
-      return(1 / ic_result)
+      ic_value <- 1 / ic_result
+      if (verbose && should_log_bootstrap_step(i)) {
+        scice_message(paste(worker_id, ": Phase 5 progress", i, "/", n_bootstrap, "- IC =", round(ic_value, 4)))
+      }
+      return(ic_value)
     }, mc.cores = bootstrap_workers)
     
     ic_bootstrap <- unlist(ic_bootstrap)
