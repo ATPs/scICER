@@ -24,7 +24,7 @@ This description matches the code on `main` at commit `0d07f1d`.
 5. For each remaining `k`, run intensive optimization:
    - evaluate many gamma values,
    - keep gammas where at least one trial hits target `k` (effective count),
-   - compute IC using hit trials only,
+   - compute IC using all trials for each admitted gamma,
    - compute IC/MEI stability metrics,
    - select `best_labels`.
 6. Return an `scICE` object and annotate which `k` values are consistent under `ic_threshold`.
@@ -340,7 +340,7 @@ This is the most expensive part.
   - compute median effective cluster count across trials,
   - identify hit trials where effective count equals target `k`,
   - if no hit trial exists, mark invalid and skip IC,
-  - if at least one hit exists, compute IC from hit trials only and keep that hit-only matrix reference.
+  - if at least one hit exists, compute IC from all trials and keep the full trial matrix reference.
 
 Critical point:
 

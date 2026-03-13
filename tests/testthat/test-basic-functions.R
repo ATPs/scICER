@@ -344,7 +344,7 @@ test_that("optimize_clustering keeps raw labels and applies final-only merge", {
   expect_true(all(table(result$best_labels) >= 2L))
 })
 
-test_that("optimize_clustering admits gamma on any-hit and computes IC from hit trials only", {
+test_that("optimize_clustering admits gamma on any-hit and computes IC from all trials", {
   ig <- igraph::make_ring(4)
   hit_labels <- c(0L, 0L, 1L, 1L)   # effective clusters (min=2): 2
   miss_labels <- c(0L, 1L, 2L, 3L)  # effective clusters (min=2): 0
@@ -384,8 +384,13 @@ test_that("optimize_clustering admits gamma on any-hit and computes IC from hit 
   # Median effective count per gamma is 1 (from {2, 0}), so old median==target
   # logic would reject all gammas. Any-hit admission should keep them valid.
   expect_false(is.null(result))
-  expect_equal(length(result$labels$arr), 1L)
-  expect_equal(result$labels$arr[[1]], hit_labels)
+  expect_equal(length(result$labels$arr), 2L)
+  expected_arr <- sort(c(
+    paste(hit_labels, collapse = ","),
+    paste(miss_labels, collapse = ",")
+  ))
+  observed_arr <- sort(vapply(result$labels$arr, paste, collapse = ",", character(1)))
+  expect_equal(observed_arr, expected_arr)
 })
 
 test_that("plot_ic show_gamma controls selected-gamma subtitle", {

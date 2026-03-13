@@ -2078,6 +2078,7 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
     scice_message(paste(worker_id, ":   Max iterations:", max_iterations))
     scice_message(paste(worker_id, ":   Beta:", beta))
     scice_message(paste(worker_id, ":   Leiden iterations:", n_iterations))
+    scice_message(paste(worker_id, ":   Gamma admission uses any-hit; IC uses all trials at admitted gamma"))
     if (min_cluster_size > 1L) {
       scice_message(
         paste(
@@ -2252,19 +2253,17 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
       ))
     }
 
-    hit_matrix <- cluster_matrix[, hit_trials, drop = FALSE]
-    rm(cluster_matrix)
-    extracted <- extract_clustering_array(hit_matrix)
+    extracted <- extract_clustering_array(cluster_matrix)
     ic_result <- calculate_ic_from_extracted(extracted)
     ic_score <- 1 / ic_result
     rm(extracted)
 
     matrix_ref <- store_cluster_matrix(
-      hit_matrix,
+      cluster_matrix,
       runtime_context = runtime_context,
       prefix = sprintf("k%d_g%03d", target_clusters, gamma_idx)
     )
-    rm(hit_matrix)
+    rm(cluster_matrix)
     
     if (log_this_gamma) {
       gamma_elapsed <- as.numeric(difftime(Sys.time(), gamma_start_time, units = "secs"))
@@ -2274,7 +2273,7 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
           "completed in", round(gamma_elapsed, 3), "seconds",
           "- median effective clusters =", mean_clusters,
           "- hit trials =", hit_count, "/", n_trials,
-          "- IC =", round(ic_score, 4)
+          "- IC (all trials) =", round(ic_score, 4)
         )
       )
     }
@@ -2370,7 +2369,7 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
         "gammas with at least one target-hit trial for", target_clusters, "effective clusters"
       )
     )
-    scice_message(paste(worker_id, ": Phase 3 - IC scores already computed during Phase 1 for valid gammas"))
+    scice_message(paste(worker_id, ": Phase 3 - IC scores already computed during Phase 1 for valid gammas (all trials per admitted gamma)"))
   }
   
   valid_results <- gamma_results[valid_indices]
