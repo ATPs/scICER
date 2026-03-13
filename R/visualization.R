@@ -25,6 +25,8 @@ NULL
 #' @param figure_size Figure size as c(width, height) (default: c(10, 6))
 #' @param title Plot title (default: "Clustering Consistency Analysis")
 #' @param show_threshold Whether to show threshold line (default: TRUE)
+#' @param show_gamma Whether to append selected gamma values per target k in the
+#'   subtitle (default: TRUE)
 #'
 #' @return ggplot object
 #' @export
@@ -40,7 +42,8 @@ NULL
 #' plot_ic(scice_results, threshold = 1.01, title = "My Clustering Analysis")
 #' }
 plot_ic <- function(scice_results, threshold = 1.005, figure_size = c(10, 6),
-                   title = "Clustering Consistency Analysis", show_threshold = TRUE) {
+                   title = "Clustering Consistency Analysis", show_threshold = TRUE,
+                   show_gamma = TRUE) {
 
   if (!inherits(scice_results, "scICE")) {
     stop("Input must be a scICE results object")
@@ -102,6 +105,46 @@ plot_ic <- function(scice_results, threshold = 1.005, figure_size = c(10, 6),
   
   # Add consistency status to plot data
   plot_data$is_consistent <- plot_data$cluster_number %in% consistent_cluster_numbers
+  
+  # Build subtitle text
+  subtitle_parts <- c(
+    paste("Lower IC scores indicate more consistent clustering. Threshold:", threshold)
+  )
+  
+  if (has_exclusion_info) {
+    excluded_clusters <- scice_results$n_cluster[scice_results$excluded]
+    if (length(excluded_clusters) > 0) {
+      subtitle_parts <- c(
+        subtitle_parts,
+        paste("Excluded clusters:", paste(excluded_clusters, collapse = ", "))
+      )
+    }
+  }
+  
+  if (isTRUE(show_gamma)) {
+    format_gamma <- function(x) {
+      if (!is.finite(x)) {
+        return("NA")
+      }
+      format(signif(x, 6), trim = TRUE, scientific = TRUE)
+    }
+    gamma_indices <- valid_indices[!is.na(scice_results$gamma[valid_indices])]
+    if (length(gamma_indices) > 0) {
+      gamma_summary <- paste(
+        paste0(
+          "k=",
+          scice_results$n_cluster[gamma_indices],
+          ": ",
+          vapply(scice_results$gamma[gamma_indices], format_gamma, character(1))
+        ),
+        collapse = "; "
+      )
+      subtitle_parts <- c(subtitle_parts, paste("Selected gamma:", gamma_summary))
+    } else {
+      subtitle_parts <- c(subtitle_parts, "Selected gamma: unavailable")
+    }
+  }
+  subtitle_text <- paste(subtitle_parts, collapse = "\n")
 
   # Create the plot
   p <- ggplot2::ggplot(plot_data, ggplot2::aes(x = factor(cluster_number), y = ic_score)) +
@@ -119,8 +162,7 @@ plot_ic <- function(scice_results, threshold = 1.005, figure_size = c(10, 6),
     ggplot2::scale_y_continuous(name = "Inconsistency (IC) Score",
                       limits = c(0.99, max(plot_data$ic_score) * 1.05)) +
     ggplot2::labs(title = title,
-         subtitle = paste("Lower IC scores indicate more consistent clustering.",
-                         "Threshold:", threshold)) +
+         subtitle = subtitle_text) +
     ggplot2::theme_minimal() +
     ggplot2::theme(
       plot.title = ggplot2::element_text(size = 14, face = "bold"),
@@ -143,16 +185,6 @@ plot_ic <- function(scice_results, threshold = 1.005, figure_size = c(10, 6),
                      label = paste("Threshold =", threshold),
                      color = "red",
                      size = 3.5)
-  }
-  
-  # Add information about excluded clusters if available
-  if (has_exclusion_info) {
-    excluded_clusters <- scice_results$n_cluster[scice_results$excluded]
-    if (length(excluded_clusters) > 0) {
-      subtitle_text <- paste("Lower IC scores indicate more consistent clustering. Threshold:", threshold,
-                            "\nExcluded clusters:", paste(excluded_clusters, collapse = ", "))
-      p <- p + ggplot2::labs(subtitle = subtitle_text)
-    }
   }
 
   return(p)

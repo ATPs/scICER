@@ -344,6 +344,74 @@ test_that("optimize_clustering keeps raw labels and applies final-only merge", {
   expect_true(all(table(result$best_labels) >= 2L))
 })
 
+test_that("optimize_clustering admits gamma on any-hit and computes IC from hit trials only", {
+  ig <- igraph::make_ring(4)
+  hit_labels <- c(0L, 0L, 1L, 1L)   # effective clusters (min=2): 2
+  miss_labels <- c(0L, 1L, 2L, 3L)  # effective clusters (min=2): 0
+  call_count <- 0L
+
+  local_mocked_bindings(
+    leiden_clustering = function(...) {
+      call_count <<- call_count + 1L
+      if ((call_count %% 2L) == 1L) {
+        return(hit_labels)
+      }
+      miss_labels
+    },
+    .package = "scICER"
+  )
+
+  result <- scICER:::optimize_clustering(
+    igraph_obj = ig,
+    target_clusters = 2L,
+    gamma_range = c(0.1, 0.1),
+    objective_function = "modularity",
+    n_trials = 2L,
+    n_bootstrap = 2L,
+    seed = 123,
+    beta = 0.1,
+    n_iterations = 1L,
+    max_iterations = 3L,
+    resolution_tolerance = 1e-3,
+    n_workers = 1L,
+    snn_graph = Matrix::Diagonal(4),
+    min_cluster_size = 2L,
+    verbose = FALSE,
+    worker_id = "TEST",
+    in_parallel_context = FALSE
+  )
+
+  # Median effective count per gamma is 1 (from {2, 0}), so old median==target
+  # logic would reject all gammas. Any-hit admission should keep them valid.
+  expect_false(is.null(result))
+  expect_equal(length(result$labels$arr), 1L)
+  expect_equal(result$labels$arr[[1]], hit_labels)
+})
+
+test_that("plot_ic show_gamma controls selected-gamma subtitle", {
+  scice_results <- list(
+    gamma = c(0.5, 0.8),
+    labels = list(NULL, NULL),
+    ic = c(1.001, 1.02),
+    ic_vec = list(c(1.001, 1.002), c(1.02, 1.03)),
+    n_cluster = c(2L, 3L),
+    best_labels = list(NULL, NULL),
+    n_iter = c(10L, 10L),
+    mei = list(NULL, NULL),
+    k = c(10L, 10L),
+    excluded = c(FALSE, FALSE),
+    exclusion_reason = c("none", "none")
+  )
+  class(scice_results) <- "scICE"
+
+  plot_with_gamma <- plot_ic(scice_results, show_gamma = TRUE)
+  expect_true(grepl("Selected gamma:", plot_with_gamma$labels$subtitle, fixed = TRUE))
+  expect_true(grepl("k=2:", plot_with_gamma$labels$subtitle, fixed = TRUE))
+
+  plot_without_gamma <- plot_ic(scice_results, show_gamma = FALSE)
+  expect_false(grepl("Selected gamma:", plot_without_gamma$labels$subtitle, fixed = TRUE))
+})
+
 test_that("find_resolution_ranges stops early when a preliminary trial hits target", {
   ig <- igraph::make_ring(4)
   call_count <- 0L

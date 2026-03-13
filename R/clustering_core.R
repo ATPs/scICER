@@ -2225,8 +2225,11 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
       integer(1)
     )
     mean_clusters <- as.integer(stats::median(n_clusters_vec))
+    hit_trials <- which(n_clusters_vec == target_clusters)
+    hit_count <- as.integer(length(hit_trials))
+    hit_rate <- as.double(hit_count) / as.double(n_trials)
 
-    if (mean_clusters != target_clusters) {
+    if (hit_count < 1L) {
       rm(cluster_matrix)
       if (log_this_gamma) {
         gamma_elapsed <- as.numeric(difftime(Sys.time(), gamma_start_time, units = "secs"))
@@ -2235,6 +2238,7 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
             worker_id, ": Phase 1 progress gamma", gamma_idx, "/", length(gamma_sequence),
             "completed in", round(gamma_elapsed, 3), "seconds",
             "- median effective clusters =", mean_clusters,
+            "- hit trials =", hit_count, "/", n_trials,
             "(target =", target_clusters, "; IC skipped)"
           )
         )
@@ -2242,21 +2246,25 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
       return(list(
         valid = FALSE,
         gamma = gamma_val,
-        mean_clusters = mean_clusters
+        mean_clusters = mean_clusters,
+        hit_count = hit_count,
+        hit_rate = hit_rate
       ))
     }
 
-    extracted <- extract_clustering_array(cluster_matrix)
+    hit_matrix <- cluster_matrix[, hit_trials, drop = FALSE]
+    rm(cluster_matrix)
+    extracted <- extract_clustering_array(hit_matrix)
     ic_result <- calculate_ic_from_extracted(extracted)
     ic_score <- 1 / ic_result
     rm(extracted)
 
     matrix_ref <- store_cluster_matrix(
-      cluster_matrix,
+      hit_matrix,
       runtime_context = runtime_context,
       prefix = sprintf("k%d_g%03d", target_clusters, gamma_idx)
     )
-    rm(cluster_matrix)
+    rm(hit_matrix)
     
     if (log_this_gamma) {
       gamma_elapsed <- as.numeric(difftime(Sys.time(), gamma_start_time, units = "secs"))
@@ -2265,6 +2273,7 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
           worker_id, ": Phase 1 progress gamma", gamma_idx, "/", length(gamma_sequence),
           "completed in", round(gamma_elapsed, 3), "seconds",
           "- median effective clusters =", mean_clusters,
+          "- hit trials =", hit_count, "/", n_trials,
           "- IC =", round(ic_score, 4)
         )
       )
@@ -2274,6 +2283,8 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
       valid = TRUE,
       gamma = gamma_val,
       mean_clusters = mean_clusters,
+      hit_count = hit_count,
+      hit_rate = hit_rate,
       ic = ic_score,
       matrix_ref = matrix_ref
     )
@@ -2299,29 +2310,66 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
   }
   
   mean_clusters <- vapply(gamma_results, function(x) x$mean_clusters, numeric(1))
+  hit_counts <- vapply(
+    gamma_results,
+    function(x) {
+      if (is.null(x$hit_count)) {
+        return(0L)
+      }
+      as.integer(x$hit_count)
+    },
+    integer(1)
+  )
+  valid_flags <- vapply(gamma_results, function(x) isTRUE(x$valid), logical(1))
   
   if (verbose) {
-    scice_message(paste(worker_id, ": Phase 2 - Filtering for target effective cluster count:", target_clusters))
+    scice_message(paste(worker_id, ": Phase 2 - Filtering for target effective cluster count (any-hit admission):", target_clusters))
     cluster_counts <- table(mean_clusters)
     for (i in 1:length(cluster_counts)) {
       count_val <- names(cluster_counts)[i]
       freq <- cluster_counts[i]
       scice_message(paste(worker_id, ":   ", freq, "gammas -> ", count_val, " effective clusters", sep = ""))
     }
+    admitted_count <- sum(valid_flags)
+    scice_message(
+      paste(
+        worker_id, ":   admitted gammas (>=1 target-hit trial):",
+        admitted_count, "/", length(gamma_results)
+      )
+    )
+    if (admitted_count > 0) {
+      admitted_hit_counts <- table(hit_counts[valid_flags])
+      for (i in 1:length(admitted_hit_counts)) {
+        hit_val <- names(admitted_hit_counts)[i]
+        freq <- admitted_hit_counts[i]
+        scice_message(paste(worker_id, ":   ", freq, "admitted gammas -> ", hit_val, " hit trials", sep = ""))
+      }
+    }
   }
   
-  # Filter for target cluster number
-  valid_indices <- which(mean_clusters == target_clusters)
+  # Filter for target cluster number by any-hit rule
+  valid_indices <- which(valid_flags)
   
   if (length(valid_indices) == 0) {
     if (verbose) {
-      scice_message(paste(worker_id, ": ERROR - No gammas produced target effective cluster count", target_clusters))
+      scice_message(
+        paste(
+          worker_id,
+          ": ERROR - No gammas produced at least one target-hit trial for effective cluster count",
+          target_clusters
+        )
+      )
     }
     return(NULL)
   }
   
   if (verbose) {
-    scice_message(paste(worker_id, ": Found", length(valid_indices), "gammas producing", target_clusters, "effective clusters"))
+    scice_message(
+      paste(
+        worker_id, ": Found", length(valid_indices),
+        "gammas with at least one target-hit trial for", target_clusters, "effective clusters"
+      )
+    )
     scice_message(paste(worker_id, ": Phase 3 - IC scores already computed during Phase 1 for valid gammas"))
   }
   

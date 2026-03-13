@@ -23,7 +23,8 @@ This description matches the code on `main` at commit `0d07f1d`.
 4. Optionally filter unstable `k` values.
 5. For each remaining `k`, run intensive optimization:
    - evaluate many gamma values,
-   - keep only gammas whose median cluster count matches target `k`,
+   - keep gammas where at least one trial hits target `k` (effective count),
+   - compute IC using hit trials only,
    - compute IC/MEI stability metrics,
    - select `best_labels`.
 6. Return an `scICE` object and annotate which `k` values are consistent under `ic_threshold`.
@@ -337,18 +338,19 @@ This is the most expensive part.
 - for each gamma:
   - run `n_trials` Leiden calls (`run_leiden_trial()` -> `leiden_clustering()`),
   - compute median effective cluster count across trials,
-  - if median count != target `k`, mark invalid and skip IC,
-  - if median count == target, compute IC and keep matrix reference.
+  - identify hit trials where effective count equals target `k`,
+  - if no hit trial exists, mark invalid and skip IC,
+  - if at least one hit exists, compute IC from hit trials only and keep that hit-only matrix reference.
 
 Critical point:
 
-- **exact equality** is required (`mean_clusters == target_clusters`).
-- If no gamma passes this exact criterion, optimization returns `NULL` for that `k`.
+- Gamma admission uses an **any-hit rule** (`hit_count >= 1`), including single-hit cases.
+- If no gamma has any hit trial, optimization returns `NULL` for that `k`.
 
 #### 5.6.2 Phase 2: target-count filtering
 
 - summarize how many gamma values produced each effective count,
-- keep only exact matches to target.
+- keep only gammas admitted by the any-hit rule.
 
 #### 5.6.3 Phase 3: best gamma selection
 
@@ -461,7 +463,7 @@ The pipeline can return no valid cluster solutions even without exceptions.
 
 Common patterns:
 
-1. No gamma exactly matches target effective count in Phase 2.
+1. No gamma has any trial hitting target effective count in Phase 2.
 2. All targets are excluded by filtering (`remove_threshold` finite).
 3. Effective-count semantics with higher `min_cluster_size` makes target hard to hit.
 4. Strong stochastic/non-monotonic behavior near gamma boundaries.
@@ -469,7 +471,7 @@ Common patterns:
 Symptoms in logs:
 
 - many lines like `median effective clusters = 0` with very high raw clusters,
-- final `ERROR - No gammas produced target effective cluster count X`,
+- final errors about no gamma having target-hit trials for effective cluster count `X`,
 - final result vectors length `0`.
 
 ## 9. Relationship to Seurat Resolution/Gamma
@@ -535,4 +537,3 @@ scICE_clustering
             -> calculate_ecs
   -> consistency post-processing (ic_threshold)
 ```
-

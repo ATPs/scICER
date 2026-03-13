@@ -9,7 +9,8 @@ plot_ic(
   threshold = 1.005,
   figure_size = c(10, 6),
   title = "Clustering Consistency Analysis",
-  show_threshold = TRUE
+  show_threshold = TRUE,
+  show_gamma = TRUE
 )
 }
 \arguments{
@@ -22,6 +23,9 @@ plot_ic(
 \item{title}{Plot title (default: "Clustering Consistency Analysis")}
 
 \item{show_threshold}{Whether to show threshold line (default: TRUE)}
+
+\item{show_gamma}{Whether to append selected gamma values per target k in the
+subtitle (default: TRUE)}
 }
 \value{
 ggplot object
