@@ -166,6 +166,15 @@ test_that("get_robust_labels keeps backward compatibility for old results", {
   )
 })
 
+test_that("count_effective_clusters handles thresholds and all-small fallback", {
+  labels <- c(0L, 0L, 1L, 1L, 1L, 2L)
+
+  expect_equal(scICER:::count_effective_clusters(labels, min_cluster_size = 1L), 3L)
+  expect_equal(scICER:::count_effective_clusters(labels, min_cluster_size = 2L), 2L)
+  expect_equal(scICER:::count_effective_clusters(labels, min_cluster_size = 4L), 0L)
+  expect_equal(scICER:::count_effective_clusters(integer(0), min_cluster_size = 3L), 0L)
+})
+
 test_that("merge_small_clusters_to_neighbors prioritizes eligible target clusters", {
   labels <- c(0L, 0L, 0L, 0L, 0L, 1L, 2L, 2L)
   snn <- matrix(0, nrow = 8, ncol = 8)
@@ -187,27 +196,7 @@ test_that("merge_small_clusters_to_neighbors prioritizes eligible target cluster
   expect_true(length(final_sizes) == 1L || min(final_sizes) >= 3L)
 })
 
-test_that("merge_small_clusters_to_neighbors iterates until no undersized clusters remain", {
-  labels <- c(0L, 0L, 1L, 1L, 2L)
-  snn <- matrix(0, nrow = 5, ncol = 5)
-
-  # Cluster 2 singleton prefers cluster 1 in the first merge.
-  snn[5, 3:4] <- 5
-  snn[3:4, 5] <- 5
-  snn[5, 1:2] <- 1
-  snn[1:2, 5] <- 1
-
-  merged <- scICER:::merge_small_clusters_to_neighbors(
-    labels = labels,
-    snn_graph = Matrix::Matrix(snn, sparse = TRUE),
-    min_cluster_size = 3L
-  )
-
-  final_sizes <- table(merged)
-  expect_true(length(final_sizes) == 1L || min(final_sizes) >= 3L)
-})
-
-test_that("merge_small_clusters_to_neighbors uses fixed-seed tie breaking", {
+test_that("merge_small_clusters_to_neighbors uses deterministic smallest-id tie breaking", {
   labels <- c(0L, 0L, 0L, 1L, 1L, 1L, 2L)
   snn <- matrix(0, nrow = 7, ncol = 7)
 
@@ -223,24 +212,22 @@ test_that("merge_small_clusters_to_neighbors uses fixed-seed tie breaking", {
   set.seed(1234)
   merged_b <- scICER:::merge_small_clusters_to_neighbors(labels, graph, min_cluster_size = 2L)
 
-  expected_target <- local({
-    has_seed <- exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
-    if (has_seed) {
-      old_seed <- get(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
-    }
-    on.exit({
-      if (has_seed) {
-        assign(".Random.seed", old_seed, envir = .GlobalEnv)
-      } else if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
-        rm(".Random.seed", envir = .GlobalEnv)
-      }
-    }, add = TRUE)
-    set.seed(1)
-    as.integer(sample(c(0L, 1L), size = 1))
-  })
-
   expect_equal(merged_a, merged_b)
-  expect_equal(merged_a[7], expected_target)
+  expect_equal(merged_a[7], 0L)
+})
+
+test_that("merge_small_clusters_to_neighbors collapses all-small labels to one cluster", {
+  labels <- c(0L, 0L, 1L, 1L)
+  graph <- Matrix::Matrix(0, nrow = 4, ncol = 4, sparse = TRUE)
+
+  merged <- scICER:::merge_small_clusters_to_neighbors(
+    labels = labels,
+    snn_graph = graph,
+    min_cluster_size = 3L
+  )
+
+  expect_equal(length(unique(merged)), 1L)
+  expect_true(all(merged == 0L))
 })
 
 test_that("scICE_clustering validates min_cluster_size and preserves legacy mode", {
@@ -294,13 +281,13 @@ test_that("scICE_clustering enforces min_cluster_size on best labels", {
   result <- scICE_clustering(
     object = pbmc_small,
     graph_name = "RNA_snn",
-    cluster_range = 1:2,
+    cluster_range = 0L,
     n_workers = 1,
     n_trials = 2,
     n_bootstrap = 2,
     seed = 123,
     remove_threshold = Inf,
-    min_cluster_size = 5,
+    min_cluster_size = 2,
     verbose = FALSE
   )
 
@@ -309,8 +296,52 @@ test_that("scICE_clustering enforces min_cluster_size on best labels", {
 
   for (label_vec in non_null_labels) {
     cluster_sizes <- table(label_vec)
-    expect_true(length(cluster_sizes) == 1L || min(cluster_sizes) >= 5L)
+    expect_true(length(cluster_sizes) == 1L || min(cluster_sizes) >= 2L)
   }
+})
+
+test_that("optimize_clustering keeps raw labels and applies final-only merge", {
+  ig <- igraph::make_ring(6)
+  raw_labels <- c(0L, 0L, 0L, 1L, 2L, 2L)
+  zero_graph <- Matrix::Matrix(0, nrow = 6, ncol = 6, sparse = TRUE)
+
+  local_mocked_bindings(
+    leiden_clustering = function(...) raw_labels,
+    .package = "scICER"
+  )
+
+  result <- scICER:::optimize_clustering(
+    igraph_obj = ig,
+    target_clusters = 2L,
+    gamma_range = c(0.1, 0.2),
+    objective_function = "modularity",
+    n_trials = 2L,
+    n_bootstrap = 2L,
+    seed = 123,
+    beta = 0.1,
+    n_iterations = 1L,
+    max_iterations = 3L,
+    resolution_tolerance = 1e-3,
+    n_workers = 1L,
+    snn_graph = zero_graph,
+    min_cluster_size = 2L,
+    verbose = FALSE,
+    worker_id = "TEST",
+    in_parallel_context = FALSE
+  )
+
+  expect_false(is.null(result))
+  expect_true(any(table(raw_labels) < 2L))
+  expect_equal(length(result$labels$arr), 1L)
+  expect_equal(result$labels$arr[[1]], raw_labels)
+
+  expected_best <- scICER:::merge_small_clusters_to_neighbors(
+    labels = raw_labels,
+    snn_graph = zero_graph,
+    min_cluster_size = 2L
+  )
+  expect_equal(result$best_labels, expected_best)
+  expect_true(all(table(result$best_labels) >= 2L))
 })
 
 test_that("find_resolution_ranges stops early when a preliminary trial hits target", {
@@ -337,6 +368,35 @@ test_that("find_resolution_ranges stops early when a preliminary trial hits targ
   )
   
   expect_true("2" %in% names(ranges))
+  expect_equal(call_count, 1L)
+})
+
+test_that("find_resolution_ranges target matching uses effective cluster count", {
+  ig <- igraph::make_ring(4)
+  call_count <- 0L
+
+  local_mocked_bindings(
+    cached_leiden_clustering = function(...) {
+      call_count <<- call_count + 1L
+      c(0L, 0L, 0L, 1L)
+    },
+    .package = "scICER"
+  )
+
+  ranges <- scICER:::find_resolution_ranges(
+    igraph_obj = ig,
+    cluster_range = 1L,
+    start_g = 0,
+    end_g = 0.2,
+    objective_function = "modularity",
+    resolution_tolerance = 1.0,
+    n_workers = 1,
+    verbose = FALSE,
+    snn_graph = Matrix::Diagonal(4),
+    min_cluster_size = 2L
+  )
+
+  expect_true("1" %in% names(ranges))
   expect_equal(call_count, 1L)
 })
 

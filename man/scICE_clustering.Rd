@@ -18,7 +18,7 @@ scICE_clustering(
   ic_threshold = Inf,
   objective_function = "CPM",
   remove_threshold = 1.15,
-  min_cluster_size = 5,
+  min_cluster_size = 2,
   resolution_tolerance = 1e-08,
   verbose = TRUE
 )
@@ -51,9 +51,11 @@ scICE_clustering(
 \item{remove_threshold}{Threshold for removing inconsistent results (default: 1.15)}
 
 \item{min_cluster_size}{Minimum number of cells required per cluster. Clusters
-smaller than this threshold are iteratively merged into nearest neighboring
-clusters based on SNN connectivity. Set to \code{1} to disable merging.
-Default: \code{5}. A value of \code{2} approximates Seurat singleton behavior.}
+smaller than this threshold are excluded from target-cluster counting during
+resolution search and optimization. IC/MEI are always computed from raw
+(unmerged) trial labels. A single final merge is applied only to
+\code{best_labels}. Set to \code{1} to disable this behavior.
+Default: \code{2}, matching Seurat singleton behavior.}
 
 \item{resolution_tolerance}{Tolerance for resolution parameter search (default: 1e-8)}
 
@@ -63,15 +65,15 @@ Default: \code{5}. A value of \code{2} approximates Seurat singleton behavior.}
 A list containing:
 \describe{
   \item{gamma}{Resolution parameters for each cluster number}
-  \item{labels}{Clustering results for each cluster number}
+  \item{labels}{Raw clustering arrays used for IC/MEI calculations (no small-cluster merge)}
   \item{ic}{Inconsistency scores for each cluster number}
   \item{ic_vec}{Bootstrap IC distributions}
   \item{n_cluster}{Number of clusters tested}
-  \item{best_labels}{Best clustering labels for each cluster number}
+  \item{best_labels}{Final best labels (single post-optimization merge applied when \code{min_cluster_size > 1})}
   \item{n_iter}{Number of iterations used}
   \item{mei}{Mutual Element-wise Information scores}
   \item{consistent_clusters}{Cluster numbers meeting consistency threshold}
-  \item{min_cluster_size}{Minimum cluster size used for iterative small-cluster merging}
+  \item{min_cluster_size}{Minimum cluster size used for effective-count matching and final best-label merge}
 }
 }
 \description{

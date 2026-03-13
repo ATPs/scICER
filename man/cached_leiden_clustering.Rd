@@ -34,7 +34,7 @@ cached_leiden_clustering(
 
 \item{cache_key_suffix}{Additional suffix for cache key (default: "")}
 
-\item{snn_graph}{Seurat SNN graph matrix used for minimum-size cluster merging}
+\item{snn_graph}{Seurat SNN graph matrix (reserved for compatibility)}
 
 \item{min_cluster_size}{Minimum required cells per cluster}
 }

@@ -47,9 +47,9 @@ clustering_main(
 
 \item{remove_threshold}{Threshold for removing inconsistent results}
 
-\item{snn_graph}{Seurat SNN graph matrix for minimum-size cluster merging}
+\item{snn_graph}{Seurat SNN graph matrix for final small-cluster merge}
 
-\item{min_cluster_size}{Minimum required cells per cluster}
+\item{min_cluster_size}{Minimum required cells per effective cluster count}
 
 \item{resolution_tolerance}{Tolerance for resolution parameter search}
 

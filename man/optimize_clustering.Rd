@@ -50,9 +50,9 @@ optimize_clustering(
 
 \item{n_workers}{Requested worker count}
 
-\item{snn_graph}{Seurat SNN graph matrix for minimum-size cluster merging}
+\item{snn_graph}{Seurat SNN graph matrix for final best-label merging}
 
-\item{min_cluster_size}{Minimum required cells per cluster}
+\item{min_cluster_size}{Minimum required cells per effective cluster count}
 
 \item{verbose}{Whether to print diagnostics}
 
@@ -70,7 +70,7 @@ Refines one target cluster number inside a candidate gamma interval.
 }
 \details{
 The optimizer samples gamma values within the interval, runs repeated Leiden
-trials, retains gammas that produce the target number of clusters, then
+trials, retains gammas whose effective cluster count matches the target, then
 selects the best gamma by IC score and performs bootstrap stability assessment.
 
 Returned values include best labels, IC bootstrap vector, iteration metadata,

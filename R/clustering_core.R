@@ -34,6 +34,36 @@ reindex_cluster_labels <- function(labels) {
   as.integer(unname(id_map[as.character(labels)]))
 }
 
+#' Count effective clusters under a minimum-size rule
+#'
+#' @description
+#' Counts clusters whose size is at least \code{min_cluster_size}.
+#'
+#' @details
+#' This helper is used for target-cluster matching during resolution search and
+#' optimization. Clusters smaller than the threshold are ignored. When all
+#' clusters are undersized, the function returns \code{0}.
+#'
+#' @param labels Integer cluster labels
+#' @param min_cluster_size Minimum required cells per counted cluster
+#' @return Integer count of effective clusters
+#' @keywords internal
+count_effective_clusters <- function(labels, min_cluster_size = 1L) {
+  labels <- as.integer(labels)
+  min_cluster_size <- max(1L, as.integer(min_cluster_size))
+
+  if (length(labels) == 0L) {
+    return(0L)
+  }
+
+  if (min_cluster_size <= 1L) {
+    return(as.integer(length(unique(labels))))
+  }
+
+  cluster_sizes <- tabulate(reindex_cluster_labels(labels) + 1L)
+  as.integer(sum(cluster_sizes >= min_cluster_size))
+}
+
 #' Sample one value using a fixed seed without leaking RNG state
 #'
 #' @param values Candidate values
@@ -63,17 +93,16 @@ sample_with_fixed_seed <- function(values, seed = 1L) {
   as.integer(sample(values, size = 1))
 }
 
-#' Iteratively merge clusters smaller than a minimum size
+#' Merge undersized clusters in one fast deterministic pass
 #'
 #' @description
-#' Merges undersized clusters into nearest neighboring clusters using mean SNN
-#' connectivity. Candidate target clusters prefer those already meeting the size
-#' threshold; if none exist, all remaining clusters are considered.
+#' Reassigns each undersized cluster to one eligible target cluster based on mean
+#' SNN connectivity, without iterative re-merging loops.
 #'
 #' @param labels Integer cluster labels (0-based)
 #' @param snn_graph Seurat SNN graph matrix
 #' @param min_cluster_size Minimum required cells per cluster
-#' @return Integer labels after iterative merging (contiguous 0-based)
+#' @return Integer labels after one-pass merging (contiguous 0-based)
 #' @keywords internal
 merge_small_clusters_to_neighbors <- function(labels, snn_graph, min_cluster_size = 1L) {
   labels <- as.integer(labels)
@@ -87,79 +116,61 @@ merge_small_clusters_to_neighbors <- function(labels, snn_graph, min_cluster_siz
     stop("snn_graph dimensions must match label length when min_cluster_size > 1.")
   }
 
-  labels <- reindex_cluster_labels(labels)
+  base_labels <- reindex_cluster_labels(labels)
+  cluster_sizes <- tabulate(base_labels + 1L)
+  cluster_ids <- which(cluster_sizes > 0L) - 1L
 
-  repeat {
-    cluster_sizes <- tabulate(labels + 1L)
-    if (length(cluster_sizes) <= 1L) {
-      break
-    }
-
-    small_cluster_ids <- which(cluster_sizes < min_cluster_size) - 1L
-    if (length(small_cluster_ids) == 0L) {
-      break
-    }
-
-    order_idx <- order(cluster_sizes[small_cluster_ids + 1L], small_cluster_ids)
-    ordered_small_ids <- small_cluster_ids[order_idx]
-    merged_any <- FALSE
-
-    for (small_id in ordered_small_ids) {
-      small_cells <- which(labels == small_id)
-      if (length(small_cells) == 0L || length(small_cells) >= min_cluster_size) {
-        next
-      }
-
-      current_sizes <- tabulate(labels + 1L)
-      cluster_ids <- which(current_sizes > 0L) - 1L
-      if (length(cluster_ids) <= 1L) {
-        break
-      }
-
-      other_ids <- setdiff(cluster_ids, small_id)
-      if (length(other_ids) == 0L) {
-        next
-      }
-
-      qualified_ids <- other_ids[current_sizes[other_ids + 1L] >= min_cluster_size]
-      candidate_ids <- if (length(qualified_ids) > 0L) qualified_ids else other_ids
-
-      connectivity <- vapply(candidate_ids, function(candidate_id) {
-        candidate_cells <- which(labels == candidate_id)
-        if (length(candidate_cells) == 0L) {
-          return(-Inf)
-        }
-        sub_snn <- snn_graph[small_cells, candidate_cells, drop = FALSE]
-        as.numeric(sum(sub_snn)) / (length(small_cells) * length(candidate_cells))
-      }, numeric(1))
-
-      if (length(connectivity) == 0L || all(!is.finite(connectivity))) {
-        next
-      }
-
-      max_connectivity <- max(connectivity, na.rm = TRUE)
-      tied_candidates <- candidate_ids[which(connectivity == max_connectivity)]
-      if (length(tied_candidates) == 0L) {
-        next
-      }
-
-      target_id <- if (length(tied_candidates) == 1L) {
-        tied_candidates
-      } else {
-        sample_with_fixed_seed(tied_candidates, seed = 1L)
-      }
-
-      labels[small_cells] <- as.integer(target_id)
-      merged_any <- TRUE
-    }
-
-    labels <- reindex_cluster_labels(labels)
-    if (!merged_any) {
-      break
-    }
+  if (length(cluster_ids) <= 1L) {
+    return(base_labels)
   }
 
-  labels
+  large_cluster_ids <- cluster_ids[cluster_sizes[cluster_ids + 1L] >= min_cluster_size]
+  small_cluster_ids <- cluster_ids[cluster_sizes[cluster_ids + 1L] < min_cluster_size]
+
+  if (length(small_cluster_ids) == 0L) {
+    return(base_labels)
+  }
+
+  # If all clusters are undersized, collapse to the largest cluster (tie -> smallest id).
+  if (length(large_cluster_ids) == 0L) {
+    largest_size <- max(cluster_sizes[cluster_ids + 1L])
+    largest_ids <- cluster_ids[cluster_sizes[cluster_ids + 1L] == largest_size]
+    target_id <- min(largest_ids)
+    merged <- base_labels
+    merged[] <- as.integer(target_id)
+    return(reindex_cluster_labels(merged))
+  }
+
+  target_map <- integer(length(small_cluster_ids))
+  for (idx in seq_along(small_cluster_ids)) {
+    small_id <- small_cluster_ids[idx]
+    small_cells <- which(base_labels == small_id)
+    connectivity <- vapply(large_cluster_ids, function(candidate_id) {
+      candidate_cells <- which(base_labels == candidate_id)
+      if (length(candidate_cells) == 0L) {
+        return(-Inf)
+      }
+      sub_snn <- snn_graph[small_cells, candidate_cells, drop = FALSE]
+      as.numeric(sum(sub_snn)) / (length(small_cells) * length(candidate_cells))
+    }, numeric(1))
+
+    if (length(connectivity) == 0L || all(!is.finite(connectivity))) {
+      target_map[idx] <- min(large_cluster_ids)
+      next
+    }
+
+    max_connectivity <- max(connectivity, na.rm = TRUE)
+    tied_candidates <- large_cluster_ids[which(connectivity == max_connectivity)]
+    target_map[idx] <- min(tied_candidates)
+  }
+
+  merged <- base_labels
+  for (idx in seq_along(small_cluster_ids)) {
+    small_id <- small_cluster_ids[idx]
+    merged[base_labels == small_id] <- as.integer(target_map[idx])
+  }
+
+  reindex_cluster_labels(merged)
 }
 
 #' Cached version of leiden clustering to avoid redundant computations
@@ -185,7 +196,7 @@ merge_small_clusters_to_neighbors <- function(labels, snn_graph, min_cluster_siz
 #' @param initial_membership Initial cluster membership (optional)
 #' @param use_cache Whether to use caching (default: TRUE)
 #' @param cache_key_suffix Additional suffix for cache key (default: "")
-#' @param snn_graph Seurat SNN graph matrix used for minimum-size cluster merging
+#' @param snn_graph Seurat SNN graph matrix (reserved for compatibility)
 #' @param min_cluster_size Minimum required cells per cluster
 #' @return Vector of cluster assignments (0-based)
 #' @keywords internal
@@ -196,10 +207,9 @@ cached_leiden_clustering <- function(igraph_obj, resolution, objective_function,
   min_cluster_size <- max(1L, as.integer(min_cluster_size))
   
   if (!use_cache) {
-    raw_labels <- leiden_clustering(
+    return(leiden_clustering(
       igraph_obj, resolution, objective_function, n_iterations, beta, initial_membership
-    )
-    return(merge_small_clusters_to_neighbors(raw_labels, snn_graph, min_cluster_size))
+    ))
   }
   
   # Create cache key based on parameters (excluding initial_membership for broader reuse)
@@ -208,7 +218,6 @@ cached_leiden_clustering <- function(igraph_obj, resolution, objective_function,
     "obj", objective_function, 
     "iter", n_iterations,
     "beta", round(beta, 4),
-    "minsz", min_cluster_size,
     "suffix", cache_key_suffix,
     sep = "_"
   )
@@ -219,10 +228,9 @@ cached_leiden_clustering <- function(igraph_obj, resolution, objective_function,
   }
   
   # Compute result and cache it
-  raw_labels <- leiden_clustering(
+  result <- leiden_clustering(
     igraph_obj, resolution, objective_function, n_iterations, beta, initial_membership
   )
-  result <- merge_small_clusters_to_neighbors(raw_labels, snn_graph, min_cluster_size)
   clustering_cache_env[[cache_key]] <- result
   
   return(result)
@@ -713,8 +721,8 @@ release_cluster_matrix_refs <- function(matrix_refs) {
 #' @param max_iterations Maximum iterations for optimization
 #' @param objective_function Objective function ("modularity" or "CPM")
 #' @param remove_threshold Threshold for removing inconsistent results
-#' @param snn_graph Seurat SNN graph matrix for minimum-size cluster merging
-#' @param min_cluster_size Minimum required cells per cluster
+#' @param snn_graph Seurat SNN graph matrix for final small-cluster merge
+#' @param min_cluster_size Minimum required cells per effective cluster count
 #' @param resolution_tolerance Tolerance for resolution parameter search
 #' @param verbose Whether to print progress messages
 #' @param in_parallel_context Whether this function is called from within a parallel context (default: FALSE)
@@ -1268,12 +1276,15 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
 #' Find resolution parameter ranges for each cluster number using binary search
 #'
 #' @description
-#' Estimates lower/upper resolution bounds that reproduce each target cluster count.
+#' Estimates lower/upper resolution bounds that reproduce each target effective cluster count.
 #'
 #' @details
 #' For each requested \code{k}, this helper runs two binary searches:
-#' one for the smallest gamma yielding at least \code{k} clusters and one for the
-#' largest gamma yielding at most \code{k} clusters (CPM/modularity aware).
+#' one for the smallest gamma yielding at least \code{k} effective clusters and
+#' one for the largest gamma yielding at most \code{k} effective clusters
+#' (CPM/modularity aware).
+#' Effective clusters are those with size \code{>= min_cluster_size}; all-small
+#' trials are counted as \code{0}.
 #'
 #' Large graphs use lighter preliminary settings to reduce runtime pressure.
 #' After per-k search, adjacent ranges are lightly adjusted when nearly touching
@@ -1288,8 +1299,8 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
 #' @param n_workers Requested worker count
 #' @param verbose Whether to print progress diagnostics
 #' @param seed Optional deterministic seed
-#' @param snn_graph Seurat SNN graph matrix for minimum-size cluster merging
-#' @param min_cluster_size Minimum required cells per cluster
+#' @param snn_graph Seurat SNN graph matrix for final best-label merging
+#' @param min_cluster_size Minimum required cells per effective cluster count
 #' @param in_parallel_context Whether called from an outer parallel worker
 #' @param runtime_context Internal mutable context for spill/memory controls
 #' @return Named list mapping cluster number to \code{c(left_bound, right_bound)}
@@ -1435,18 +1446,38 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
         snn_graph = snn_graph,
         min_cluster_size = min_cluster_size
       )
-      as.integer(length(unique(labels)))
+      effective_count <- count_effective_clusters(labels, min_cluster_size = min_cluster_size)
+      raw_count <- as.integer(length(unique(labels)))
+      c(effective_count = as.integer(effective_count), raw_count = raw_count)
     }
     
     run_preliminary_trials <- function(gamma_val, cache_suffix_base, seed_base = NULL,
                                        phase_label, iteration_idx) {
       step_start_time <- Sys.time()
       trial_counts <- integer(0)
+      raw_trial_counts <- integer(0)
       early_stop <- FALSE
       early_trial_idx <- NA_integer_
       launched_trials <- 0L
       completed_trials <- 0L
       killed_trials <- 0L
+      unpack_trial_counts <- function(trial_value, trial_idx_for_error = NA_integer_) {
+        parsed <- suppressWarnings(as.integer(trial_value))
+        if (length(parsed) == 1L && !is.na(parsed[1])) {
+          return(c(effective = parsed[1], raw = parsed[1]))
+        }
+        if (length(parsed) >= 2L && !anyNA(parsed[1:2])) {
+          return(c(effective = parsed[1], raw = parsed[2]))
+        }
+        stop(
+          paste(
+            "Invalid preliminary trial output for k =", target_clusters,
+            "phase =", phase_label,
+            "iteration =", iteration_idx,
+            "trial =", trial_idx_for_error
+          )
+        )
+      }
       heartbeat(function() {
         paste(
           phase_label, "step", iteration_idx,
@@ -1489,6 +1520,7 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
         next_trial_idx <- 1L
         active_jobs <- list()
         active_job_trials <- list()
+        active_job_started <- list()
         
         launch_trial <- function(trial_idx) {
           job <- parallel::mcparallel({
@@ -1504,6 +1536,7 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
           pid_name <- as.character(job$pid)
           active_jobs[[pid_name]] <<- job
           active_job_trials[[pid_name]] <<- trial_idx
+          active_job_started[[pid_name]] <<- Sys.time()
           launched_trials <<- launched_trials + 1L
         }
         
@@ -1521,13 +1554,45 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
         while (!early_stop && length(active_jobs) > 0L) {
           ready <- parallel::mccollect(active_jobs, wait = FALSE, timeout = 0.05)
           if (is.null(ready) || length(ready) == 0L) {
+            now <- Sys.time()
+            step_elapsed <- round(as.numeric(difftime(now, step_start_time, units = "secs")), 1)
+            running_pids <- names(active_jobs)
+            running_trials <- if (length(running_pids) > 0L) {
+              vapply(running_pids, function(pid_name) as.integer(active_job_trials[[pid_name]]), integer(1))
+            } else {
+              integer(0)
+            }
+            running_preview <- if (length(running_trials) > 0L) {
+              paste(head(sort(unique(running_trials)), 5L), collapse = ",")
+            } else {
+              "none"
+            }
+            running_suffix <- if (length(unique(running_trials)) > 5L) ",..." else ""
+            longest_trial <- NA_integer_
+            longest_runtime <- 0
+            if (length(running_pids) > 0L) {
+              running_ages <- vapply(
+                running_pids,
+                function(pid_name) as.numeric(difftime(now, active_job_started[[pid_name]], units = "secs")),
+                numeric(1)
+              )
+              longest_idx <- which.max(running_ages)
+              longest_trial <- as.integer(active_job_trials[[running_pids[longest_idx]]])
+              longest_runtime <- round(running_ages[longest_idx], 1)
+            }
             heartbeat(function() {
               paste(
                 phase_label, "step", iteration_idx,
-                "- waiting preliminary trials; completed", completed_trials, "/", n_preliminary_trials,
-                "- active jobs", length(active_jobs)
+                "- waiting preliminary trials; launched", launched_trials, "/", n_preliminary_trials,
+                "completed", completed_trials, "/", n_preliminary_trials,
+                "- active jobs", length(active_jobs),
+                "- running trials", paste0("[", running_preview, running_suffix, "]"),
+                "- longest running trial", if (is.na(longest_trial)) "NA" else longest_trial,
+                "for", longest_runtime, "s",
+                "- step elapsed", step_elapsed, "s"
               )
             })
+            Sys.sleep(0.05)
             next
           }
           
@@ -1536,6 +1601,7 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
             trial_value <- ready[[pid_name]]
             active_jobs[[pid_name]] <- NULL
             active_job_trials[[pid_name]] <- NULL
+            active_job_started[[pid_name]] <- NULL
             
             if (inherits(trial_value, "try-error") || is.null(trial_value)) {
               stop(
@@ -1582,6 +1648,7 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
           try(suppressWarnings(parallel::mccollect(active_jobs, wait = TRUE)), silent = TRUE)
           active_jobs <- list()
           active_job_trials <- list()
+          active_job_started <- list()
         } else if (!early_stop && length(active_jobs) > 0L) {
           trailing_results <- parallel::mccollect(active_jobs, wait = TRUE)
           for (trial_value in trailing_results) {
@@ -1609,6 +1676,7 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
           }
           active_jobs <- list()
           active_job_trials <- list()
+          active_job_started <- list()
         }
       }
       
@@ -1936,7 +2004,7 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
 #'
 #' @details
 #' The optimizer samples gamma values within the interval, runs repeated Leiden
-#' trials, retains gammas that produce the target number of clusters, then
+#' trials, retains gammas whose effective cluster count matches the target, then
 #' selects the best gamma by IC score and performs bootstrap stability assessment.
 #'
 #' Returned values include best labels, IC bootstrap vector, iteration metadata,
@@ -1954,8 +2022,8 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
 #' @param max_iterations Maximum iterations for refinement
 #' @param resolution_tolerance Resolution tolerance for gamma sequence logic
 #' @param n_workers Requested worker count
-#' @param snn_graph Seurat SNN graph matrix for minimum-size cluster merging
-#' @param min_cluster_size Minimum required cells per cluster
+#' @param snn_graph Seurat SNN graph matrix for final best-label merging
+#' @param min_cluster_size Minimum required cells per effective cluster count
 #' @param verbose Whether to print diagnostics
 #' @param worker_id Worker label used in logs
 #' @param in_parallel_context Whether called from an outer parallel worker
@@ -1973,13 +2041,8 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
   }
 
   run_leiden_trial <- function(resolution, iterations, initial_membership = NULL) {
-    trial_labels <- leiden_clustering(
+    leiden_clustering(
       igraph_obj, resolution, objective_function, iterations, beta, initial_membership
-    )
-    merge_small_clusters_to_neighbors(
-      trial_labels,
-      snn_graph = snn_graph,
-      min_cluster_size = min_cluster_size
     )
   }
   
@@ -2000,6 +2063,14 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
     scice_message(paste(worker_id, ":   Max iterations:", max_iterations))
     scice_message(paste(worker_id, ":   Beta:", beta))
     scice_message(paste(worker_id, ":   Leiden iterations:", n_iterations))
+    if (min_cluster_size > 1L) {
+      scice_message(
+        paste(
+          worker_id, ":   Counting uses effective clusters (size >=", min_cluster_size,
+          "); final merge applied only on best_labels"
+        )
+      )
+    }
   }
   
   n_vertices <- igraph::vcount(igraph_obj)
@@ -2128,8 +2199,17 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
       })
     }
 
-    n_clusters_vec <- apply(cluster_matrix, 2, function(x) length(unique(x)))
-    mean_clusters <- stats::median(n_clusters_vec)
+    n_clusters_vec <- vapply(
+      seq_len(n_trials),
+      function(trial_idx) {
+        count_effective_clusters(
+          cluster_matrix[, trial_idx],
+          min_cluster_size = min_cluster_size
+        )
+      },
+      integer(1)
+    )
+    mean_clusters <- as.integer(stats::median(n_clusters_vec))
 
     if (mean_clusters != target_clusters) {
       rm(cluster_matrix)
@@ -2139,7 +2219,7 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
           paste(
             worker_id, ": Phase 1 progress gamma", gamma_idx, "/", length(gamma_sequence),
             "completed in", round(gamma_elapsed, 3), "seconds",
-            "- median clusters =", mean_clusters,
+            "- median effective clusters =", mean_clusters,
             "(target =", target_clusters, "; IC skipped)"
           )
         )
@@ -2169,7 +2249,7 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
         paste(
           worker_id, ": Phase 1 progress gamma", gamma_idx, "/", length(gamma_sequence),
           "completed in", round(gamma_elapsed, 3), "seconds",
-          "- median clusters =", mean_clusters,
+          "- median effective clusters =", mean_clusters,
           "- IC =", round(ic_score, 4)
         )
       )
@@ -2206,12 +2286,12 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
   mean_clusters <- vapply(gamma_results, function(x) x$mean_clusters, numeric(1))
   
   if (verbose) {
-    scice_message(paste(worker_id, ": Phase 2 - Filtering for target cluster count:", target_clusters))
+    scice_message(paste(worker_id, ": Phase 2 - Filtering for target effective cluster count:", target_clusters))
     cluster_counts <- table(mean_clusters)
     for (i in 1:length(cluster_counts)) {
       count_val <- names(cluster_counts)[i]
       freq <- cluster_counts[i]
-      scice_message(paste(worker_id, ":   ", freq, "gammas -> ", count_val, " clusters", sep = ""))
+      scice_message(paste(worker_id, ":   ", freq, "gammas -> ", count_val, " effective clusters", sep = ""))
     }
   }
   
@@ -2220,13 +2300,13 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
   
   if (length(valid_indices) == 0) {
     if (verbose) {
-      scice_message(paste(worker_id, ": ERROR - No gammas produced target cluster count", target_clusters))
+      scice_message(paste(worker_id, ": ERROR - No gammas produced target effective cluster count", target_clusters))
     }
     return(NULL)
   }
   
   if (verbose) {
-    scice_message(paste(worker_id, ": Found", length(valid_indices), "gammas producing", target_clusters, "clusters"))
+    scice_message(paste(worker_id, ": Found", length(valid_indices), "gammas producing", target_clusters, "effective clusters"))
     scice_message(paste(worker_id, ": Phase 3 - IC scores already computed during Phase 1 for valid gammas"))
   }
   
@@ -2503,9 +2583,22 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
     scice_message(paste(worker_id, ": OPTIMIZATION COMPLETE"))
   }
   
-  # Extract best labels
+  # Extract best labels: raw best trial first, then optional final merge only once.
   extracted_best <- extract_clustering_array(best_clustering)
-  best_labels <- get_best_clustering(extracted_best)
+  best_labels_raw <- get_best_clustering(extracted_best)
+  best_labels <- merge_small_clusters_to_neighbors(
+    best_labels_raw,
+    snn_graph = snn_graph,
+    min_cluster_size = min_cluster_size
+  )
+  if (verbose && min_cluster_size > 1L) {
+    scice_message(
+      paste(
+        worker_id, ": Final best_labels merge applied once with min_cluster_size =",
+        min_cluster_size
+      )
+    )
+  }
   release_cluster_matrix(best_ref)
   rm(best_clustering)
   

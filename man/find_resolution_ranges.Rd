@@ -39,9 +39,9 @@ find_resolution_ranges(
 
 \item{seed}{Optional deterministic seed}
 
-\item{snn_graph}{Seurat SNN graph matrix for minimum-size cluster merging}
+\item{snn_graph}{Seurat SNN graph matrix for final best-label merging}
 
-\item{min_cluster_size}{Minimum required cells per cluster}
+\item{min_cluster_size}{Minimum required cells per effective cluster count}
 
 \item{in_parallel_context}{Whether called from an outer parallel worker}
 
@@ -51,12 +51,15 @@ find_resolution_ranges(
 Named list mapping cluster number to \code{c(left_bound, right_bound)}
 }
 \description{
-Estimates lower/upper resolution bounds that reproduce each target cluster count.
+Estimates lower/upper resolution bounds that reproduce each target effective cluster count.
 }
 \details{
 For each requested \code{k}, this helper runs two binary searches:
-one for the smallest gamma yielding at least \code{k} clusters and one for the
-largest gamma yielding at most \code{k} clusters (CPM/modularity aware).
+one for the smallest gamma yielding at least \code{k} effective clusters and
+one for the largest gamma yielding at most \code{k} effective clusters
+(CPM/modularity aware).
+Effective clusters are those with size \code{>= min_cluster_size}; all-small
+trials are counted as \code{0}.
 
 Large graphs use lighter preliminary settings to reduce runtime pressure.
 After per-k search, adjacent ranges are lightly adjusted when nearly touching

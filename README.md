@@ -117,7 +117,7 @@ scice_results <- scICE_clustering(
   object = seurat_obj,
   cluster_range = 3:20,
   n_workers = n_workers,
-  min_cluster_size = 5,  # Merge clusters smaller than 5 cells into nearest neighbors
+  min_cluster_size = 2,  # Default; consistent with Seurat singleton behavior
   remove_threshold = Inf,
   verbose = TRUE
 )
@@ -127,7 +127,7 @@ scice_results <- scICE_clustering(
   object = seurat_obj,
   cluster_range = 3:20,
   n_workers = n_workers,
-  min_cluster_size = 5,
+  min_cluster_size = 2,
   remove_threshold = Inf,
   verbose = TRUE,
   seed = 123  # Set seed for reproducible results
@@ -180,7 +180,7 @@ results <- scICE_clustering(
   n_bootstrap = 100,              # Bootstrap iterations
   seed = 42,                      # Optional: Set for reproducible results
   ic_threshold = 1.005,           # Consistency threshold
-  min_cluster_size = 5,           # Minimum cells per cluster (set 1 to disable)
+  min_cluster_size = 2,           # Default minimum cells per effective cluster (set 1 to disable)
   verbose = TRUE                  # Progress messages
 )
 ```
@@ -198,7 +198,7 @@ results <- scICE_clustering(
   n_iterations = 10,              # Initial Leiden iterations
   max_iterations = 150,           # Maximum optimization iterations
   remove_threshold = 1.15,        # Filter inconsistent results
-  min_cluster_size = 5,           # Merge tiny clusters during Leiden trials
+  min_cluster_size = 2,           # Default threshold; final merge only on best_labels
   resolution_tolerance = 1e-8,    # Resolution search precision
   n_trials = 10,                  # Reduced for speed
   n_bootstrap = 50,               # Reduced for speed
@@ -208,6 +208,7 @@ results <- scICE_clustering(
 
 It's OK to set a large `remove_threshold` value, because `plot_ic` and `get_robust_labels` all have default `threshold = 1.005`.
 `min_cluster_size = 2` approximates Seurat singleton grouping; use `min_cluster_size = 1` to keep raw Leiden clusters.
+`labels` stay raw for IC/MEI, while `best_labels` receives one final merge pass when `min_cluster_size > 1`.
 
 ### 3. Visualization and Results
 
@@ -529,11 +530,11 @@ DimPlot(seurat_obj, reduction = "sclens_umap", group.by = "clusters_8") +
 The `scICE_clustering()` function returns a list containing:
 
 - `gamma`: Resolution parameters for each cluster number
-- `labels`: Clustering results for each cluster number  
+- `labels`: Raw clustering arrays used for IC/MEI (no small-cluster merge)
 - `ic`: Inconsistency scores (lower = more consistent)
 - `ic_vec`: Bootstrap IC distributions
 - `n_cluster`: Number of clusters tested
-- `best_labels`: Best clustering labels for each cluster number
+- `best_labels`: Final best labels (single post-optimization merge when `min_cluster_size > 1`)
 - `consistent_clusters`: Cluster numbers meeting consistency threshold
 - `mei`: Mutual Element-wise Information scores
 

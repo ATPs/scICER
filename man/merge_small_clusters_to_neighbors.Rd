@@ -2,7 +2,7 @@
 % Please edit documentation in R/clustering_core.R
 \name{merge_small_clusters_to_neighbors}
 \alias{merge_small_clusters_to_neighbors}
-\title{Iteratively merge clusters smaller than a minimum size}
+\title{Merge undersized clusters in one fast deterministic pass}
 \usage{
 merge_small_clusters_to_neighbors(labels, snn_graph, min_cluster_size = 1L)
 }
@@ -14,11 +14,10 @@ merge_small_clusters_to_neighbors(labels, snn_graph, min_cluster_size = 1L)
 \item{min_cluster_size}{Minimum required cells per cluster}
 }
 \value{
-Integer labels after iterative merging (contiguous 0-based)
+Integer labels after one-pass merging (contiguous 0-based)
 }
 \description{
-Merges undersized clusters into nearest neighboring clusters using mean SNN
-connectivity. Candidate target clusters prefer those already meeting the size
-threshold; if none exist, all remaining clusters are considered.
+Reassigns each undersized cluster to one eligible target cluster based on mean
+SNN connectivity, without iterative re-merging loops.
 }
 \keyword{internal}
