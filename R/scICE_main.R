@@ -134,6 +134,9 @@ scICE_clustering <- function(object,
     effective_workers <- 1L
   }
   n_workers <- max(1L, effective_workers)
+
+  runtime_context <- create_runtime_context()
+  on.exit(cleanup_runtime_spill(runtime_context), add = TRUE)
   
   if (verbose) {
     start_time <- Sys.time()
@@ -151,6 +154,7 @@ scICE_clustering <- function(object,
     scice_message(paste("  Range: ", min(cluster_range), "-", max(cluster_range), " (", length(cluster_range), " values)"))
     scice_message(paste("  Requested workers:", requested_workers))
     scice_message(paste("  Effective workers:", n_workers))
+    scice_message(paste("  Internal memory budget (bytes):", format(runtime_context$memory_budget_bytes, scientific = FALSE)))
     scice_message(paste("  Number of trials per resolution:", n_trials))
     scice_message(paste("  Number of bootstrap iterations:", n_bootstrap))
     scice_message(paste("  Random seed:", if(is.null(seed)) "NULL (random)" else seed))
@@ -262,7 +266,8 @@ scICE_clustering <- function(object,
     remove_threshold = remove_threshold,
     resolution_tolerance = resolution_tolerance,
     verbose = verbose,
-    in_parallel_context = FALSE
+    in_parallel_context = FALSE,
+    runtime_context = runtime_context
   )
   
   if (verbose) {

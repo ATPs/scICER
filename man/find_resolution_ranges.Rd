@@ -14,8 +14,35 @@ find_resolution_ranges(
   n_workers,
   verbose,
   seed = NULL,
-  in_parallel_context = FALSE
+  in_parallel_context = FALSE,
+  runtime_context = NULL
 )
+}
+\arguments{
+\item{igraph_obj}{igraph object to cluster}
+
+\item{cluster_range}{Target cluster numbers to search}
+
+\item{start_g}{Lower bound of search interval (log scale for CPM path)}
+
+\item{end_g}{Upper bound of search interval (log scale for CPM path)}
+
+\item{objective_function}{Objective function ("modularity" or "CPM")}
+
+\item{resolution_tolerance}{Resolution convergence tolerance}
+
+\item{n_workers}{Requested worker count}
+
+\item{verbose}{Whether to print progress diagnostics}
+
+\item{seed}{Optional deterministic seed}
+
+\item{in_parallel_context}{Whether called from an outer parallel worker}
+
+\item{runtime_context}{Internal mutable context for spill/memory controls}
+}
+\value{
+Named list mapping cluster number to \code{c(left_bound, right_bound)}
 }
 \description{
 Estimates lower/upper resolution bounds that reproduce each target cluster count.

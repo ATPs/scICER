@@ -1,5 +1,4 @@
-#' @importFrom Matrix summary
-#' @importFrom utils head
+#' @importFrom methods as
 NULL
 
 #' Perform Leiden clustering on an igraph object
@@ -59,10 +58,11 @@ leiden_clustering <- function(igraph_obj, resolution, objective_function,
 #' Converts a sparse Seurat graph matrix into an undirected weighted igraph.
 #'
 #' @details
-#' Conversion uses \code{Matrix::summary()} triplets (\code{i}, \code{j}, \code{x})
-#' to avoid dense intermediate objects and to preserve existing edge semantics in
-#' the sparse graph representation. This includes self-loops and repeated
-#' directional entries when they are present in the source matrix.
+#' Conversion reads sparse matrix slots directly (\code{@i}, \code{@p}, \code{@x})
+#' to avoid allocating a full triplet \code{data.frame} for very large graphs while
+#' preserving existing edge semantics in the sparse graph representation. This
+#' includes self-loops and repeated directional entries when they are present in
+#' the source matrix.
 #'
 #' Verbose mode emits structured timing/statistics diagnostics useful for
 #' profiling large graphs.
@@ -76,26 +76,40 @@ graph_to_igraph <- function(seurat_graph, verbose = FALSE) {
     stop("Unsupported graph format. Expected sparse matrix.")
   }
 
+  if (!inherits(seurat_graph, "dgCMatrix")) {
+    seurat_graph <- methods::as(seurat_graph, "dgCMatrix")
+  }
+
   if (verbose) {
     scice_message("GRAPH_TO_IGRAPH: Starting sparse matrix to igraph conversion...")
     scice_message(paste("GRAPH_TO_IGRAPH: Thread context - PID:", Sys.getpid()))
     scice_message(paste("GRAPH_TO_IGRAPH: Matrix class:", paste(class(seurat_graph), collapse = ", ")))
     scice_message(paste("GRAPH_TO_IGRAPH: Matrix dimensions:", nrow(seurat_graph), "x", ncol(seurat_graph)))
     scice_message(paste("GRAPH_TO_IGRAPH: Matrix storage mode:", typeof(seurat_graph)))
-    scice_message("GRAPH_TO_IGRAPH: Long step started - extracting sparse triplets...")
+    scice_message("GRAPH_TO_IGRAPH: Long step started - extracting sparse entries from matrix slots...")
     matrix_start <- Sys.time()
   }
 
-  triplets <- Matrix::summary(seurat_graph)
-  n_edges <- nrow(triplets)
-  weights <- triplets$x
-  edges_matrix <- as.matrix(triplets[, c("i", "j"), drop = FALSE])
+  col_ptr <- seurat_graph@p
+  row_idx <- seurat_graph@i + 1L
+  weights <- as.numeric(seurat_graph@x)
+  n_edges <- length(weights)
+
+  if (n_edges > 0L) {
+    col_idx <- rep.int(seq_len(ncol(seurat_graph)), diff(col_ptr))
+    edges_vector <- integer(2L * n_edges)
+    edges_vector[seq.int(1L, by = 2L, length.out = n_edges)] <- row_idx
+    edges_vector[seq.int(2L, by = 2L, length.out = n_edges)] <- col_idx
+  } else {
+    col_idx <- integer(0)
+    edges_vector <- integer(0)
+  }
 
   if (verbose) {
     matrix_time <- as.numeric(difftime(Sys.time(), matrix_start, units = "secs"))
     scice_message(paste("GRAPH_TO_IGRAPH: Extraction completed in", round(matrix_time, 3), "seconds"))
     scice_message(paste("GRAPH_TO_IGRAPH: Found", length(weights), "non-zero entries"))
-    scice_message("GRAPH_TO_IGRAPH: Long step finished - sparse triplet extraction complete.")
+    scice_message("GRAPH_TO_IGRAPH: Long step finished - sparse slot extraction complete.")
     total_entries <- as.numeric(nrow(seurat_graph)) * as.numeric(ncol(seurat_graph))
     sparsity <- if (total_entries > 0) (1 - length(weights) / total_entries) * 100 else NA_real_
     scice_message(paste("GRAPH_TO_IGRAPH: Matrix sparsity:", round(sparsity, 2), "%"))
@@ -106,14 +120,14 @@ graph_to_igraph <- function(seurat_graph, verbose = FALSE) {
     }
     scice_message(paste("GRAPH_TO_IGRAPH: Created edge list with", n_edges, "edges"))
     if (n_edges > 0) {
-      scice_message(paste("GRAPH_TO_IGRAPH: Vertex index range: [", min(edges_matrix), ", ", max(edges_matrix), "]", sep = ""))
+      scice_message(paste("GRAPH_TO_IGRAPH: Vertex index range: [", min(row_idx, col_idx), ", ", max(row_idx, col_idx), "]", sep = ""))
       scice_message("GRAPH_TO_IGRAPH: Sample edges (from -> to):")
-      head_edges <- utils::head(triplets, 5)
-      for (i in seq_len(nrow(head_edges))) {
+      n_show <- min(5L, n_edges)
+      for (i in seq_len(n_show)) {
         scice_message(
           paste(
-            "GRAPH_TO_IGRAPH:   ", head_edges$i[i], " -> ", head_edges$j[i],
-            " (weight: ", round(head_edges$x[i], 4), ")",
+            "GRAPH_TO_IGRAPH:   ", row_idx[i], " -> ", col_idx[i],
+            " (weight: ", round(weights[i], 4), ")",
             sep = ""
           )
         )
@@ -138,7 +152,7 @@ graph_to_igraph <- function(seurat_graph, verbose = FALSE) {
       scice_message("GRAPH_TO_IGRAPH: Adding edges and weights to graph...")
     }
 
-    igraph_obj <- igraph::add_edges(igraph_obj, as.vector(t(edges_matrix)))
+    igraph_obj <- igraph::add_edges(igraph_obj, edges_vector)
     igraph::E(igraph_obj)$weight <- weights
 
     if (verbose) {

@@ -27,6 +27,7 @@ Imports:
     future,
     future.apply,
     ggplot2,
+    qs,
     stats,
     methods,
     utils,

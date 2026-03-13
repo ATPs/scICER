@@ -18,7 +18,8 @@ clustering_main(
   remove_threshold,
   resolution_tolerance,
   verbose,
-  in_parallel_context = FALSE
+  in_parallel_context = FALSE,
+  runtime_context = NULL
 )
 }
 \arguments{
@@ -31,6 +32,8 @@ clustering_main(
 \item{n_trials}{Number of clustering trials per resolution}
 
 \item{n_bootstrap}{Number of bootstrap iterations}
+
+\item{seed}{Optional deterministic seed}
 
 \item{beta}{Beta parameter for Leiden clustering}
 
@@ -47,6 +50,8 @@ clustering_main(
 \item{verbose}{Whether to print progress messages}
 
 \item{in_parallel_context}{Whether this function is called from within a parallel context (default: FALSE)}
+
+\item{runtime_context}{Internal mutable context for spill/memory controls}
 }
 \value{
 List with clustering results

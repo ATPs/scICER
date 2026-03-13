@@ -19,8 +19,45 @@ optimize_clustering(
   n_workers,
   verbose = FALSE,
   worker_id = "OPTIMIZER",
-  in_parallel_context = FALSE
+  in_parallel_context = FALSE,
+  runtime_context = NULL
 )
+}
+\arguments{
+\item{igraph_obj}{igraph object to cluster}
+
+\item{target_clusters}{Target cluster count}
+
+\item{gamma_range}{Candidate resolution range}
+
+\item{objective_function}{Objective function ("modularity" or "CPM")}
+
+\item{n_trials}{Number of clustering trials per gamma}
+
+\item{n_bootstrap}{Number of bootstrap iterations}
+
+\item{seed}{Optional deterministic seed}
+
+\item{beta}{Leiden beta parameter}
+
+\item{n_iterations}{Initial Leiden iterations}
+
+\item{max_iterations}{Maximum iterations for refinement}
+
+\item{resolution_tolerance}{Resolution tolerance for gamma sequence logic}
+
+\item{n_workers}{Requested worker count}
+
+\item{verbose}{Whether to print diagnostics}
+
+\item{worker_id}{Worker label used in logs}
+
+\item{in_parallel_context}{Whether called from an outer parallel worker}
+
+\item{runtime_context}{Internal mutable context for spill/memory controls}
+}
+\value{
+List with best gamma, labels, IC summaries, and iteration metadata
 }
 \description{
 Refines one target cluster number inside a candidate gamma interval.
