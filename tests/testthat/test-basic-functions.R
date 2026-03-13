@@ -312,3 +312,103 @@ test_that("scICE_clustering enforces min_cluster_size on best labels", {
     expect_true(length(cluster_sizes) == 1L || min(cluster_sizes) >= 5L)
   }
 })
+
+test_that("find_resolution_ranges stops early when a preliminary trial hits target", {
+  ig <- igraph::make_ring(4)
+  call_count <- 0L
+  
+  local_mocked_bindings(
+    cached_leiden_clustering = function(...) {
+      call_count <<- call_count + 1L
+      c(0L, 0L, 1L, 1L)
+    },
+    .package = "scICER"
+  )
+  
+  ranges <- scICER:::find_resolution_ranges(
+    igraph_obj = ig,
+    cluster_range = 2L,
+    start_g = 0,
+    end_g = 0.2,
+    objective_function = "modularity",
+    resolution_tolerance = 1.0,
+    n_workers = 1,
+    verbose = FALSE
+  )
+  
+  expect_true("2" %in% names(ranges))
+  expect_equal(call_count, 1L)
+})
+
+test_that("find_resolution_ranges falls back to full preliminary trials when no hit exists", {
+  ig <- igraph::make_ring(4)
+  call_count <- 0L
+  
+  local_mocked_bindings(
+    cached_leiden_clustering = function(...) {
+      call_count <<- call_count + 1L
+      c(0L, 1L, 2L, 3L)
+    },
+    .package = "scICER"
+  )
+  
+  ranges <- scICER:::find_resolution_ranges(
+    igraph_obj = ig,
+    cluster_range = 2L,
+    start_g = 0,
+    end_g = 0.2,
+    objective_function = "modularity",
+    resolution_tolerance = 1.0,
+    n_workers = 1,
+    verbose = FALSE
+  )
+  
+  # Small graphs use 15 preliminary trials per step.
+  expect_true("2" %in% names(ranges))
+  expect_equal(call_count, 15L)
+})
+
+test_that("parallel preliminary trials avoid launching all trials after early hit", {
+  skip_on_os("windows")
+  
+  ig <- igraph::make_ring(4)
+  trial_log <- tempfile(pattern = "scicer_pretrial_")
+  
+  local_mocked_bindings(
+    cached_leiden_clustering = function(..., cache_key_suffix = "") {
+      trial_idx <- suppressWarnings(as.integer(sub(".*_trial_([0-9]+)$", "\\1", cache_key_suffix)))
+      if (is.na(trial_idx)) {
+        trial_idx <- 1L
+      }
+      cat(sprintf("start:%d\n", trial_idx), file = trial_log, append = TRUE)
+      if (trial_idx == 2L) {
+        Sys.sleep(0.05)
+        cat(sprintf("finish:%d\n", trial_idx), file = trial_log, append = TRUE)
+        return(c(0L, 0L, 1L, 1L))
+      }
+      Sys.sleep(1)
+      cat(sprintf("finish:%d\n", trial_idx), file = trial_log, append = TRUE)
+      c(0L, 1L, 2L, 3L)
+    },
+    .package = "scICER"
+  )
+  
+  ranges <- scICER:::find_resolution_ranges(
+    igraph_obj = ig,
+    cluster_range = 2L,
+    start_g = 0,
+    end_g = 0.2,
+    objective_function = "modularity",
+    resolution_tolerance = 1.0,
+    n_workers = 4,
+    verbose = FALSE
+  )
+  
+  lines <- if (file.exists(trial_log)) readLines(trial_log, warn = FALSE) else character(0)
+  start_lines <- grep("^start:", lines, value = TRUE)
+  
+  expect_true("2" %in% names(ranges))
+  expect_true(any(grepl("^start:2$", start_lines)))
+  expect_true(length(start_lines) >= 2L)
+  expect_lte(length(start_lines), 4L)
+})

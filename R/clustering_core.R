@@ -369,7 +369,11 @@ cap_workers_by_memory <- function(requested_workers, bytes_per_task, runtime_con
   }
 
   concurrent_cap <- floor(memory_budget / (as.double(bytes_per_task) * overhead_factor))
-  concurrent_cap <- max(1L, as.integer(concurrent_cap))
+  if (!is.finite(concurrent_cap) || concurrent_cap < 1) {
+    concurrent_cap <- 1
+  }
+  concurrent_cap <- min(concurrent_cap, .Machine$integer.max)
+  concurrent_cap <- as.integer(concurrent_cap)
   min(workers, concurrent_cap)
 }
 
@@ -1260,13 +1264,282 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
     estimate_trial_matrix_bytes(n_vertices, n_preliminary_trials, 1L),
     runtime_context
   )
+
+  active_cluster_workers <- max(1L, min(as.integer(length(cluster_range)), nested_workers))
+  preliminary_trial_workers <- if (in_parallel_context) {
+    1L
+  } else {
+    max(1L, as.integer(floor(max(1L, as.integer(n_workers)) / active_cluster_workers)))
+  }
+  preliminary_trial_workers <- min(preliminary_trial_workers, n_preliminary_trials)
+  preliminary_trial_workers <- cap_workers_by_memory(
+    preliminary_trial_workers,
+    estimate_trial_matrix_bytes(n_vertices, 1L, 1L),
+    runtime_context
+  )
   
   if (verbose && in_parallel_context) {
     scice_message(paste("RESOLUTION_SEARCH: Nested worker optimization - using", nested_workers, 
                  "workers per cluster ( ", n_workers, "total /", length(cluster_range), "clusters)"))
   }
+  if (verbose) {
+    scice_message(
+      paste(
+        "RESOLUTION_SEARCH: Preliminary trial workers per gamma:",
+        preliminary_trial_workers
+      )
+    )
+    scice_message(
+      paste(
+        "RESOLUTION_SEARCH: Preliminary trial strategy - early stop on first trial reaching target k; fallback to median when no trial hits target."
+      )
+    )
+  }
   
   range_results <- cross_platform_mclapply(cluster_range, function(target_clusters) {
+    early_stop_count <- 0L
+    fallback_count <- 0L
+    early_stop_saved_trials <- 0L
+    trial_steps <- 0L
+    
+    derive_trial_seed <- function(seed_base, trial_idx) {
+      if (is.null(seed_base)) {
+        return(NULL)
+      }
+      trial_seed <- as.integer((as.double(seed_base) + trial_idx) %% .Machine$integer.max)
+      if (is.na(trial_seed) || trial_seed <= 0L) {
+        trial_seed <- 1L
+      }
+      trial_seed
+    }
+    
+    run_single_trial_count <- function(trial_idx, gamma_val, cache_suffix_base, seed_base,
+                                       use_cache, use_trial_suffix) {
+      trial_seed <- derive_trial_seed(seed_base, trial_idx)
+      if (!is.null(trial_seed)) {
+        set.seed(trial_seed)
+      }
+      suffix <- if (use_trial_suffix) {
+        paste(cache_suffix_base, "trial", trial_idx, sep = "_")
+      } else {
+        cache_suffix_base
+      }
+      labels <- cached_leiden_clustering(
+        igraph_obj,
+        gamma_val,
+        objective_function,
+        n_iter_preliminary,
+        beta_preliminary,
+        use_cache = use_cache,
+        cache_key_suffix = suffix,
+        snn_graph = snn_graph,
+        min_cluster_size = min_cluster_size
+      )
+      as.integer(length(unique(labels)))
+    }
+    
+    run_preliminary_trials <- function(gamma_val, cache_suffix_base, seed_base = NULL,
+                                       phase_label, iteration_idx) {
+      step_start_time <- Sys.time()
+      trial_counts <- integer(0)
+      early_stop <- FALSE
+      early_trial_idx <- NA_integer_
+      launched_trials <- 0L
+      completed_trials <- 0L
+      killed_trials <- 0L
+      
+      if (.Platform$OS.type == "windows" || preliminary_trial_workers <= 1L) {
+        for (trial_idx in seq_len(n_preliminary_trials)) {
+          launched_trials <- launched_trials + 1L
+          n_clusters <- run_single_trial_count(
+            trial_idx = trial_idx,
+            gamma_val = gamma_val,
+            cache_suffix_base = cache_suffix_base,
+            seed_base = seed_base,
+            use_cache = TRUE,
+            use_trial_suffix = FALSE
+          )
+          trial_counts <- c(trial_counts, n_clusters)
+          completed_trials <- completed_trials + 1L
+          if (n_clusters == target_clusters) {
+            early_stop <- TRUE
+            early_trial_idx <- trial_idx
+            break
+          }
+        }
+      } else {
+        next_trial_idx <- 1L
+        active_jobs <- list()
+        active_job_trials <- list()
+        
+        launch_trial <- function(trial_idx) {
+          job <- parallel::mcparallel({
+            run_single_trial_count(
+              trial_idx = trial_idx,
+              gamma_val = gamma_val,
+              cache_suffix_base = cache_suffix_base,
+              seed_base = seed_base,
+              use_cache = FALSE,
+              use_trial_suffix = TRUE
+            )
+          }, silent = TRUE)
+          pid_name <- as.character(job$pid)
+          active_jobs[[pid_name]] <<- job
+          active_job_trials[[pid_name]] <<- trial_idx
+          launched_trials <<- launched_trials + 1L
+        }
+        
+        fill_active_jobs <- function() {
+          while (!early_stop &&
+                 next_trial_idx <= n_preliminary_trials &&
+                 length(active_jobs) < preliminary_trial_workers) {
+            launch_trial(next_trial_idx)
+            next_trial_idx <<- next_trial_idx + 1L
+          }
+        }
+        
+        fill_active_jobs()
+        
+        while (!early_stop && length(active_jobs) > 0L) {
+          ready <- parallel::mccollect(active_jobs, wait = FALSE, timeout = 0.05)
+          if (is.null(ready) || length(ready) == 0L) {
+            next
+          }
+          
+          for (pid_name in names(ready)) {
+            trial_idx <- as.integer(active_job_trials[[pid_name]])
+            trial_value <- ready[[pid_name]]
+            active_jobs[[pid_name]] <- NULL
+            active_job_trials[[pid_name]] <- NULL
+            
+            if (inherits(trial_value, "try-error") || is.null(trial_value)) {
+              stop(
+                paste(
+                  "Preliminary trial failed for k =", target_clusters,
+                  "phase =", phase_label,
+                  "iteration =", iteration_idx,
+                  "trial =", trial_idx
+                )
+              )
+            }
+            
+            n_clusters <- as.integer(trial_value[1])
+            if (length(n_clusters) != 1L || is.na(n_clusters)) {
+              stop(
+                paste(
+                  "Invalid preliminary trial output for k =", target_clusters,
+                  "phase =", phase_label,
+                  "iteration =", iteration_idx,
+                  "trial =", trial_idx
+                )
+              )
+            }
+            
+            trial_counts <- c(trial_counts, n_clusters)
+            completed_trials <- completed_trials + 1L
+            
+            if (n_clusters == target_clusters && !early_stop) {
+              early_stop <- TRUE
+              early_trial_idx <- trial_idx
+            }
+          }
+          
+          if (!early_stop) {
+            fill_active_jobs()
+          }
+        }
+        
+        if (early_stop && length(active_jobs) > 0L) {
+          killed_trials <- length(active_jobs)
+          for (pid_name in names(active_jobs)) {
+            try(parallel::mckill(active_jobs[[pid_name]]), silent = TRUE)
+          }
+          try(suppressWarnings(parallel::mccollect(active_jobs, wait = TRUE)), silent = TRUE)
+          active_jobs <- list()
+          active_job_trials <- list()
+        } else if (!early_stop && length(active_jobs) > 0L) {
+          trailing_results <- parallel::mccollect(active_jobs, wait = TRUE)
+          for (trial_value in trailing_results) {
+            if (inherits(trial_value, "try-error") || is.null(trial_value)) {
+              stop(
+                paste(
+                  "Preliminary trial failed for k =", target_clusters,
+                  "phase =", phase_label,
+                  "iteration =", iteration_idx
+                )
+              )
+            }
+            n_clusters <- as.integer(trial_value[1])
+            if (length(n_clusters) != 1L || is.na(n_clusters)) {
+              stop(
+                paste(
+                  "Invalid preliminary trial output for k =", target_clusters,
+                  "phase =", phase_label,
+                  "iteration =", iteration_idx
+                )
+              )
+            }
+            trial_counts <- c(trial_counts, n_clusters)
+            completed_trials <- completed_trials + 1L
+          }
+          active_jobs <- list()
+          active_job_trials <- list()
+        }
+      }
+      
+      if (length(trial_counts) == 0L) {
+        stop(
+          paste(
+            "No preliminary trial results for k =", target_clusters,
+            "phase =", phase_label,
+            "iteration =", iteration_idx
+          )
+        )
+      }
+      
+      n_clusters_obtained <- if (early_stop) {
+        as.numeric(target_clusters)
+      } else {
+        as.numeric(stats::median(trial_counts))
+      }
+      elapsed_seconds <- as.numeric(difftime(Sys.time(), step_start_time, units = "secs"))
+      
+      if (verbose) {
+        if (early_stop) {
+          scice_message(
+            paste(
+              "RESOLUTION_SEARCH: k =", target_clusters,
+              phase_label, "step", iteration_idx,
+              "- gamma =", signif(gamma_val, 6),
+              "- early stop at trial", early_trial_idx, "/", n_preliminary_trials,
+              "(completed", completed_trials,
+              "killed", killed_trials,
+              "elapsed", round(elapsed_seconds, 3), "s)"
+            )
+          )
+        } else {
+          scice_message(
+            paste(
+              "RESOLUTION_SEARCH: k =", target_clusters,
+              phase_label, "step", iteration_idx,
+              "- all trials completed",
+              "(completed", completed_trials, "/", n_preliminary_trials, ")",
+              "- median fallback clusters =", signif(n_clusters_obtained, 6),
+              "- elapsed", round(elapsed_seconds, 3), "s"
+            )
+          )
+        }
+      }
+      
+      list(
+        n_clusters_obtained = n_clusters_obtained,
+        early_stop = early_stop,
+        completed_trials = completed_trials,
+        killed_trials = killed_trials,
+        launched_trials = launched_trials
+      )
+    }
+
     left <- start_g
     right <- end_g
     max_iterations <- max_search_iterations
@@ -1284,19 +1557,31 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
       
       # Test clustering with current gamma using vectorized operations
       # Set deterministic seed for lower bound search if base seed provided
+      range_seed <- NULL
       if (!is.null(seed)) {
-        range_seed <- seed + target_clusters * 10 + iteration_count
-        set.seed(range_seed)
+        range_seed <- as.integer((as.double(seed) + target_clusters * 10 + iteration_count) %% .Machine$integer.max)
+        if (is.na(range_seed) || range_seed <= 0L) {
+          range_seed <- 1L
+        }
       }
+
+      cluster_results <- run_preliminary_trials(
+        gamma_val,
+        cache_suffix_base = paste("res_search_lower", target_clusters, sep = "_"),
+        seed_base = range_seed,
+        phase_label = "lower",
+        iteration_idx = iteration_count
+      )
       
-      cluster_results <- replicate(n_preliminary_trials, {
-        cached_leiden_clustering(igraph_obj, gamma_val, objective_function, n_iter_preliminary, beta_preliminary,
-                               cache_key_suffix = paste("res_search_lower", target_clusters, sep = "_"),
-                               snn_graph = snn_graph, min_cluster_size = min_cluster_size)
-      }, simplify = TRUE)
-      
-      # Use apply for efficient calculation - count unique clusters instead of max + 1
-      n_clusters_obtained <- stats::median(apply(cluster_results, 2, function(x) length(unique(x))))
+      n_clusters_obtained <- cluster_results$n_clusters_obtained
+      trial_steps <- trial_steps + 1L
+      if (cluster_results$early_stop) {
+        early_stop_count <- early_stop_count + 1L
+        early_stop_saved_trials <- early_stop_saved_trials +
+          max(0L, as.integer(n_preliminary_trials - cluster_results$completed_trials))
+      } else {
+        fallback_count <- fallback_count + 1L
+      }
       if (verbose && (iteration_count == 1 || iteration_count %% 5 == 0)) {
         interval_span <- if (objective_function == "modularity") {
           abs(right - left)
@@ -1339,19 +1624,31 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
       
       # Test clustering with current gamma using vectorized operations
       # Set deterministic seed for upper bound search if base seed provided
+      range_seed <- NULL
       if (!is.null(seed)) {
-        range_seed <- seed + target_clusters * 10 + 100 + iteration_count  # +100 to distinguish from lower bound
-        set.seed(range_seed)
+        range_seed <- as.integer((as.double(seed) + target_clusters * 10 + 100 + iteration_count) %% .Machine$integer.max)
+        if (is.na(range_seed) || range_seed <= 0L) {
+          range_seed <- 1L
+        }
       }
+
+      cluster_results <- run_preliminary_trials(
+        gamma_val,
+        cache_suffix_base = paste("res_search_upper", target_clusters, sep = "_"),
+        seed_base = range_seed,
+        phase_label = "upper",
+        iteration_idx = iteration_count
+      )
       
-      cluster_results <- replicate(n_preliminary_trials, {
-        cached_leiden_clustering(igraph_obj, gamma_val, objective_function, n_iter_preliminary, beta_preliminary,
-                               cache_key_suffix = paste("res_search_upper", target_clusters, sep = "_"),
-                               snn_graph = snn_graph, min_cluster_size = min_cluster_size)
-      }, simplify = TRUE)
-      
-      # Use apply for efficient calculation - count unique clusters instead of max + 1
-      n_clusters_obtained <- stats::median(apply(cluster_results, 2, function(x) length(unique(x))))
+      n_clusters_obtained <- cluster_results$n_clusters_obtained
+      trial_steps <- trial_steps + 1L
+      if (cluster_results$early_stop) {
+        early_stop_count <- early_stop_count + 1L
+        early_stop_saved_trials <- early_stop_saved_trials +
+          max(0L, as.integer(n_preliminary_trials - cluster_results$completed_trials))
+      } else {
+        fallback_count <- fallback_count + 1L
+      }
       if (verbose && (iteration_count == 1 || iteration_count %% 5 == 0)) {
         interval_span <- if (objective_function == "modularity") {
           abs(right - left)
@@ -1385,6 +1682,19 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
         paste0(
           "RESOLUTION_SEARCH: k = ", target_clusters,
           " - bounds identified [", signif(display_left, 6), ", ", signif(display_right, 6), "]"
+        )
+      )
+      avg_saved_trials <- if (early_stop_count > 0L) {
+        round(early_stop_saved_trials / early_stop_count, 2)
+      } else {
+        0
+      }
+      scice_message(
+        paste(
+          "RESOLUTION_SEARCH: k =", target_clusters,
+          "trial summary - early stops:", early_stop_count, "/", trial_steps,
+          "- median fallbacks:", fallback_count,
+          "- avg trials saved when early stop:", avg_saved_trials
         )
       )
     }
