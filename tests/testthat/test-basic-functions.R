@@ -71,7 +71,7 @@ test_that("calculate_mei_from_array works", {
   
   mei_scores <- calculate_mei_from_array(clustering_array)
   
-  expect_length(mei_scores, 1)  # One score per unique clustering
+  expect_length(mei_scores, n_cells)  # One score per cell
   expect_true(all(mei_scores >= 0 & mei_scores <= 1))
 })
 
@@ -90,4 +90,18 @@ test_that("utility functions handle edge cases", {
   # Test with empty input (should handle gracefully)
   expect_error(calculate_ecs(numeric(0), numeric(0)))
   expect_error(calculate_ecs(c(1, 2), c(1)))  # Different lengths
-}) 
+})
+
+test_that("calculate_ecs scalar mode is stable for large inputs", {
+  set.seed(1)
+  n <- 250000
+  cluster_a <- sample(1:10, n, replace = TRUE)
+  cluster_b <- sample(1:10, n, replace = TRUE)
+
+  scalar_score <- calculate_ecs(cluster_a, cluster_b, return_vector = FALSE)
+  vector_score <- mean(calculate_ecs(cluster_a, cluster_b, return_vector = TRUE))
+
+  expect_equal(scalar_score, vector_score, tolerance = 1e-10)
+  expect_true(is.finite(scalar_score))
+  expect_true(scalar_score >= 0 && scalar_score <= 1)
+})

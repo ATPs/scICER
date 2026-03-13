@@ -157,7 +157,7 @@ If you launch jobs in the background and only capture `stdout`, logs can appear 
 Use:
 
 ```bash
-Rscript run_scice.R > scice.log 2>&1 &
+Rscript examples/run_scice.R > scice.log 2>&1 &
 tail -f scice.log
 ```
 

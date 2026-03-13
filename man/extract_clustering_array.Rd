@@ -13,6 +13,12 @@ extract_clustering_array(clustering_matrix)
 List with unique clustering arrays and their probabilities
 }
 \description{
-Extract unique clustering arrays and their probabilities
+Deduplicates repeated clustering outcomes and computes their empirical weights.
+}
+\details{
+This helper converts each clustering column to a compact string signature,
+counts frequency of each unique signature, and converts back to integer label
+vectors. The result is sorted by decreasing probability, which improves
+downstream IC/MEI calculations that iterate over unique outcomes.
 }
 \keyword{internal}

@@ -22,6 +22,11 @@ mp_calculation(L, Lr, eta = 1, eps = 1e-06, max_iter = 10000)
 List with filtered eigenvalues and bounds
 }
 \description{
-Helper function: Marchenko-Pastur calculation
-Julia equivalent: _mp_calculation(L, Lr, eta=1, eps=1e-6, max_iter=10000)
+Iteratively refines MP bounds using observed and randomized spectra.
 }
+\details{
+Starts from MP estimates on random eigenvalues, then iteratively updates
+upper/lower bounds until convergence or iteration limit. Includes safeguards
+when too few eigenvalues remain inside the candidate interval.
+}
+\keyword{internal}

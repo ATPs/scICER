@@ -18,6 +18,15 @@ find_resolution_ranges(
 )
 }
 \description{
-Find resolution parameter ranges for each cluster number using binary search
+Estimates lower/upper resolution bounds that reproduce each target cluster count.
+}
+\details{
+For each requested \code{k}, this helper runs two binary searches:
+one for the smallest gamma yielding at least \code{k} clusters and one for the
+largest gamma yielding at most \code{k} clusters (CPM/modularity aware).
+
+Large graphs use lighter preliminary settings to reduce runtime pressure.
+After per-k search, adjacent ranges are lightly adjusted when nearly touching
+to reduce ambiguity between neighboring target counts.
 }
 \keyword{internal}

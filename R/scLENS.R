@@ -1,34 +1,39 @@
 #' @import Seurat
-#' @import Matrix
 #' @import parallel
-#' @import foreach
-#' @import doParallel
 #' @importFrom future.apply future_lapply
 #' @importFrom future plan multisession sequential
-#' @importFrom stats sd median mad quantile rnorm cor
-#' @importFrom utils setTxtProgressBar txtProgressBar
+#' @importFrom stats sd median quantile rnorm cor
 #' @importFrom methods as
-#' @importFrom RSpectra eigs_sym
-#'
-#' scLENS R Implementation
-#' Converted from Julia implementation for single-cell RNA-seq data analysis
-#' Uses Random Matrix Theory (RMT) for signal detection and robustness testing
+NULL
+
+# scLENS R implementation converted from the original Julia workflow.
 
 #' Helper function: Convert Seurat object to sparse matrix
 #' Julia equivalent: df2sparr(inp_df)
+#'
+#' @description
+#' Extracts an assay layer from a Seurat object and returns a sparse matrix in
+#' scLENS working orientation.
+#'
+#' @details
+#' Seurat stores expression matrices as genes x cells. scLENS helper routines in
+#' this file operate on cells x genes, so this function transposes the extracted
+#' matrix and ensures \code{dgCMatrix} representation.
+#'
+#' Handles SeuratObject v5 layer API (\code{layer=}) and older slot API
+#' (\code{slot=}) automatically.
 #' 
 #' @param seurat_obj Seurat object
 #' @param assay Which assay to use (default: "RNA")
 #' @param slot Which slot to use (default: "counts")
 #' @return Sparse matrix (genes x cells)
-options("future.globals.maxSize" = Inf)
-
+#' @keywords internal
 seurat_to_sparse <- function(seurat_obj, assay = "RNA", slot = "counts") {
   # Get the count matrix from Seurat object
   # Note: Seurat stores as genes x cells, Julia used cells x genes
   
   # Handle SeuratObject v5+ deprecation of slot parameter
-  if (packageVersion("SeuratObject") >= "5.0.0") {
+  if (utils::packageVersion("SeuratObject") >= "5.0.0") {
     # Use layer parameter for SeuratObject v5+
     count_matrix <- GetAssayData(seurat_obj, assay = assay, layer = slot)
   } else {
@@ -47,9 +52,17 @@ seurat_to_sparse <- function(seurat_obj, assay = "RNA", slot = "counts") {
 
 #' Helper function: Project to simplex (L1 normalization)
 #' Julia equivalent: proj_l = x -> issparse(x) ? spdiagm(1 ./sum(x,dims=2)[:]) * x : x ./ sum(x,dims=2)
+#'
+#' @description
+#' Performs row-wise L1 normalization.
+#'
+#' @details
+#' Each row is divided by its row sum. Zero-sum rows are protected by replacing
+#' their denominator with 1 to avoid division-by-zero.
 #' 
 #' @param x Matrix to normalize
 #' @return L1 normalized matrix
+#' @keywords internal
 proj_l <- function(x) {
   # Calculate row sums
   row_sums <- Matrix::rowSums(x)
@@ -65,9 +78,18 @@ proj_l <- function(x) {
 
 #' Helper function: Z-score with L2 normalization
 #' Julia equivalent: zscore_with_l2(X)
+#'
+#' @description
+#' Applies column-wise standardization followed by an L2-distance based scaling.
+#'
+#' @details
+#' This approximates the normalization path in the original Julia implementation:
+#' standardize columns, center by mean profile, then normalize by relative L2
+#' deviation to stabilize downstream covariance/eigen computations.
 #' 
 #' @param X Matrix to normalize
 #' @return Z-score normalized matrix with L2 correction
+#' @keywords internal
 zscore_with_l2 <- function(X) {
   # Original Julia code:
   # std_ = std(X,dims=1)[:]
@@ -104,10 +126,19 @@ zscore_with_l2 <- function(X) {
 
 #' Helper function: Scale data with centering
 #' Julia equivalent: scaled_gdata(X;dim=1, position_="mean")
+#'
+#' @description
+#' Centers and scales matrix columns using mean/SD or median/MAD.
+#'
+#' @details
+#' \code{position_ = "mean"} is sparse-aware and prefers matrix-friendly paths;
+#' \code{"median"} densifies as needed for robust statistics. Zero dispersion
+#' columns are guarded to avoid unstable scaling.
 #' 
 #' @param X Matrix to scale
 #' @param position_ Centering method ("mean" or "median")
 #' @return Scaled matrix
+#' @keywords internal
 scaled_gdata <- function(X, position_ = "mean") {
   # Original Julia code handles both mean and median centering
   # We implement mean centering here as it's the most common
@@ -154,7 +185,7 @@ scaled_gdata <- function(X, position_ = "mean") {
     # Use matrixStats if available, otherwise fall back to apply
     if (!requireNamespace("matrixStats", quietly = TRUE)) {
       col_medians <- apply(X_dense, 2, median)
-      col_mads <- apply(X_dense, 2, mad)
+      col_mads <- apply(X_dense, 2, stats::mad)
     } else {
       col_medians <- matrixStats::colMedians(X_dense)
       col_mads <- matrixStats::colMads(X_dense)
@@ -173,10 +204,19 @@ scaled_gdata <- function(X, position_ = "mean") {
 
 #' Helper function: Generate random matrix for null model
 #' Julia equivalent: random_nz(pre_df;rmix=true,mix_p=nothing)
+#'
+#' @description
+#' Generates a null matrix by shuffling non-zero values while preserving sparsity.
+#'
+#' @details
+#' The non-zero index pattern is kept fixed and values are permuted. Optional
+#' row shuffling (\code{rmix = TRUE}) adds additional structural perturbation for
+#' robustness and null-model comparisons.
 #' 
 #' @param X Sparse matrix
 #' @param rmix Whether to randomize structure
 #' @return Randomized sparse matrix
+#' @keywords internal
 random_nz <- function(X, rmix = TRUE) {
   # Original Julia code:
   # tmp_X, return_mat = if typeof(pre_df) <: DataFrame
@@ -218,9 +258,17 @@ random_nz <- function(X, rmix = TRUE) {
 
 #' Helper function: Compute Wishart matrix (covariance matrix)
 #' Julia equivalent: _wishart_matrix(X;device="cpu")
+#'
+#' @description
+#' Computes a Wishart-style covariance proxy \code{X X^T / p}.
+#'
+#' @details
+#' Converts sparse matrices to dense when needed and returns a symmetric matrix
+#' used by the RMT eigenspectrum steps in scLENS.
 #' 
 #' @param X Input matrix
 #' @return Wishart matrix (covariance matrix)
+#' @keywords internal
 wishart_matrix <- function(X) {
   # Original Julia code:
   # X = if issparse(X)
@@ -245,10 +293,19 @@ wishart_matrix <- function(X) {
 
 #' Helper function: Compute eigendecomposition
 #' Julia equivalent: _get_eigen(Y;device="cpu")
+#'
+#' @description
+#' Computes eigenvalues/eigenvectors with optional partial decomposition.
+#'
+#' @details
+#' Prefers \pkg{RSpectra} for large matrices when available, with automatic
+#' fallback to base \code{eigen()} for robustness. Returns a consistent list
+#' interface regardless of backend.
 #' 
 #' @param Y Symmetric matrix
 #' @param k Number of eigenvalues/vectors to compute (optional)
 #' @return List with eigenvalues and eigenvectors
+#' @keywords internal
 get_eigen <- function(Y, k = NULL) {
   # If k is not specified, estimate reasonable number based on matrix size
   if (is.null(k)) {
@@ -298,9 +355,17 @@ get_eigen <- function(Y, k = NULL) {
 
 #' Helper function: Marchenko-Pastur parameters
 #' Julia equivalent: _mp_parameters(L)
+#'
+#' @description
+#' Estimates Marchenko-Pastur summary parameters from an eigenvalue vector.
+#'
+#' @details
+#' Computes first/second moments, gamma, and MP support bounds (\code{b_minus},
+#' \code{b_plus}) with defensive handling for invalid/negative gamma estimates.
 #' 
 #' @param L Vector of eigenvalues
 #' @return List of Marchenko-Pastur parameters
+#' @keywords internal
 mp_parameters <- function(L) {
   # Original Julia code:
   # moment_1 = mean(L)
@@ -339,6 +404,14 @@ mp_parameters <- function(L) {
 
 #' Helper function: Marchenko-Pastur calculation
 #' Julia equivalent: _mp_calculation(L, Lr, eta=1, eps=1e-6, max_iter=10000)
+#'
+#' @description
+#' Iteratively refines MP bounds using observed and randomized spectra.
+#'
+#' @details
+#' Starts from MP estimates on random eigenvalues, then iteratively updates
+#' upper/lower bounds until convergence or iteration limit. Includes safeguards
+#' when too few eigenvalues remain inside the candidate interval.
 #' 
 #' @param L Original eigenvalues
 #' @param Lr Random eigenvalues
@@ -346,6 +419,7 @@ mp_parameters <- function(L) {
 #' @param eps Convergence threshold
 #' @param max_iter Maximum iterations
 #' @return List with filtered eigenvalues and bounds
+#' @keywords internal
 mp_calculation <- function(L, Lr, eta = 1, eps = 1e-6, max_iter = 10000) {
   # Original Julia code implements an iterative algorithm to find the optimal
   # boundaries for the Marchenko-Pastur distribution
@@ -414,10 +488,18 @@ mp_calculation <- function(L, Lr, eta = 1, eps = 1e-6, max_iter = 10000) {
 
 #' Helper function: Tracy-Widom calculation
 #' Julia equivalent: _tw(L, L_mp)
+#'
+#' @description
+#' Computes Tracy-Widom-inspired signal threshold from MP-filtered eigenvalues.
+#'
+#' @details
+#' Uses MP gamma and spectrum size to estimate fluctuation scale and derives
+#' \code{lambda_c}, the cutoff separating likely signal from noise components.
 #' 
 #' @param L Original eigenvalues
 #' @param L_mp Marchenko-Pastur eigenvalues
 #' @return List with Tracy-Widom parameters
+#' @keywords internal
 tw_calculation <- function(L, L_mp) {
   # Original Julia code:
   # gamma = _mp_parameters(L_mp)["gamma"]
@@ -441,9 +523,18 @@ tw_calculation <- function(L, L_mp) {
 
 #' Helper function: Get eigenvalues and eigenvectors
 #' Julia equivalent: get_eigvec(X;device="gpu")
+#'
+#' @description
+#' Computes sorted positive eigenspectrum and projected eigenvectors.
+#'
+#' @details
+#' Chooses computation path based on matrix shape (\code{N > M} vs \code{N <= M})
+#' for efficiency, then projects vectors to the original space and normalizes
+#' columns where needed.
 #' 
 #' @param X Input matrix
 #' @return List with eigenvalues and eigenvectors
+#' @keywords internal
 get_eigvec <- function(X) {
   # Original Julia code:
   # N, M = size(X)
@@ -503,10 +594,20 @@ get_eigvec <- function(X) {
 
 #' Helper function: Get significant eigenvalues using RMT
 #' Julia equivalent: get_sigev(X,Xr;device="gpu")
+#'
+#' @description
+#' Splits eigencomponents into signal and noise using RMT criteria.
+#'
+#' @details
+#' This routine combines MP filtering and Tracy-Widom thresholding to identify
+#' signal eigenvalues/eigenvectors from observed data relative to a randomized
+#' null matrix, and returns both signal and noise components for downstream
+#' robustness analysis.
 #' 
 #' @param X Scaled data matrix
 #' @param Xr Randomized data matrix
 #' @return List with signal eigenvalues, eigenvectors, and RMT parameters
+#' @keywords internal
 get_sigev <- function(X, Xr) {
   # Original Julia code implements Random Matrix Theory filtering
   # to distinguish signal from noise eigenvalues
@@ -761,6 +862,9 @@ sclens <- function(seurat_obj,
   # Configure future backend for better memory efficiency
   old_plan <- future::plan()  # Save current plan to restore later
   on.exit(future::plan(old_plan), add = TRUE)  # Restore plan on exit
+  old_future_globals_maxsize <- getOption("future.globals.maxSize")
+  options(future.globals.maxSize = Inf)
+  on.exit(options(future.globals.maxSize = old_future_globals_maxsize), add = TRUE)
   
   if (n_threads > 1) {
     actual_threads <- min(n_threads, parallel::detectCores() - 1)
@@ -798,11 +902,17 @@ sclens <- function(seurat_obj,
     message(paste("  Matrix dimensions:", nrow(X_), "x", ncol(X_), "(cells x genes)"))
     message(paste("  Matrix class:", paste(class(X_), collapse = ", ")))
     if (inherits(X_, "sparseMatrix")) {
-      n_nonzero <- sum(X_ > 0)
+      n_nonzero <- length(X_@x)
       message(paste("  Non-zero entries:", n_nonzero))
-      message(paste("  Sparsity:", round((1 - n_nonzero / (nrow(X_) * ncol(X_))) * 100, 2), "%"))
+      total_entries <- as.numeric(nrow(X_)) * as.numeric(ncol(X_))
+      sparsity <- if (total_entries > 0) {
+        (1 - n_nonzero / total_entries) * 100
+      } else {
+        NA_real_
+      }
+      message(paste("  Sparsity:", round(sparsity, 2), "%"))
       if (n_nonzero > 0) {
-        values <- as.vector(X_[X_ > 0])
+        values <- X_@x
         message(paste("  Value range: [", round(min(values), 4), ", ", round(max(values), 4), "]", sep = ""))
         message(paste("  Mean value:", round(mean(values), 4)))
       }

@@ -14,6 +14,10 @@ mp_parameters(L)
 List of Marchenko-Pastur parameters
 }
 \description{
-Helper function: Marchenko-Pastur parameters
-Julia equivalent: _mp_parameters(L)
+Estimates Marchenko-Pastur summary parameters from an eigenvalue vector.
 }
+\details{
+Computes first/second moments, gamma, and MP support bounds (\code{b_minus},
+\code{b_plus}) with defensive handling for invalid/negative gamma estimates.
+}
+\keyword{internal}

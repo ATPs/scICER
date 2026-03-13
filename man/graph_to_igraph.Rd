@@ -15,6 +15,15 @@ graph_to_igraph(seurat_graph, verbose = FALSE)
 igraph object
 }
 \description{
-Convert Seurat graph to igraph object
+Converts a sparse Seurat graph matrix into an undirected weighted igraph.
+}
+\details{
+Conversion uses \code{Matrix::summary()} triplets (\code{i}, \code{j}, \code{x})
+to avoid dense intermediate objects and to preserve existing edge semantics in
+the sparse graph representation. This includes self-loops and repeated
+directional entries when they are present in the source matrix.
+
+Verbose mode emits structured timing/statistics diagnostics useful for
+profiling large graphs.
 }
 \keyword{internal}

@@ -23,6 +23,14 @@ optimize_clustering(
 )
 }
 \description{
-Optimize clustering within a resolution range
+Refines one target cluster number inside a candidate gamma interval.
+}
+\details{
+The optimizer samples gamma values within the interval, runs repeated Leiden
+trials, retains gammas that produce the target number of clusters, then
+selects the best gamma by IC score and performs bootstrap stability assessment.
+
+Returned values include best labels, IC bootstrap vector, iteration metadata,
+and supporting diagnostics used by higher-level summary functions.
 }
 \keyword{internal}

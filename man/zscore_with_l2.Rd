@@ -14,6 +14,11 @@ zscore_with_l2(X)
 Z-score normalized matrix with L2 correction
 }
 \description{
-Helper function: Z-score with L2 normalization
-Julia equivalent: zscore_with_l2(X)
+Applies column-wise standardization followed by an L2-distance based scaling.
 }
+\details{
+This approximates the normalization path in the original Julia implementation:
+standardize columns, center by mean profile, then normalize by relative L2
+deviation to stabilize downstream covariance/eigen computations.
+}
+\keyword{internal}

@@ -1,6 +1,5 @@
 #' @import Seurat
 #' @import SeuratObject
-#' @importFrom methods inherits
 #' @importFrom parallel detectCores
 NULL
 
@@ -10,6 +9,11 @@ NULL
 #' Validates that a Seurat object has the necessary preprocessing steps completed
 #' for scICER analysis. Checks for normalization, variable features, scaling, PCA,
 #' and neighbor graphs.
+#'
+#' @details
+#' This helper is intended as a preflight check before expensive clustering runs.
+#' It returns a structured report rather than throwing for missing preprocessing,
+#' so users can decide whether to proceed or follow suggested commands.
 #'
 #' @param seurat_obj A Seurat object to validate
 #' @param graph_name Name of the graph to check for (default: "snn")
@@ -73,9 +77,9 @@ check_seurat_ready <- function(seurat_obj, graph_name = "snn") {
   ready <- length(issues) == 0
   
   summary_msg <- if (ready) {
-    "✓ Seurat object is ready for scICER analysis"
+    "OK: Seurat object is ready for scICER analysis"
   } else {
-    paste("✗ Seurat object needs preprocessing:", paste(issues, collapse = ", "))
+    paste("ERROR: Seurat object needs preprocessing:", paste(issues, collapse = ", "))
   }
   
   return(list(
@@ -91,6 +95,17 @@ check_seurat_ready <- function(seurat_obj, graph_name = "snn") {
 #' @description
 #' Provides parameter recommendations for scICER analysis based on the number of cells
 #' in the dataset. Helps optimize performance and accuracy for different dataset sizes.
+#'
+#' @details
+#' Recommendations are generated from dataset-size buckets and analysis depth:
+#' \itemize{
+#'   \item \code{quick}: faster screening with fewer trials/bootstraps;
+#'   \item \code{standard}: balanced defaults;
+#'   \item \code{thorough}: higher robustness with longer runtime.
+#' }
+#'
+#' Returned values are intended as starting points and can be adjusted based on
+#' graph density, hardware limits, and desired precision.
 #'
 #' @param n_cells Number of cells in the dataset
 #' @param analysis_type Type of analysis: "quick", "standard", or "thorough" (default: "standard")
@@ -199,6 +214,19 @@ get_recommended_parameters <- function(n_cells, analysis_type = "standard") {
 #' @description
 #' Generates a comprehensive text summary of scICER analysis results,
 #' including consistent clusters, parameter settings, and interpretation guidance.
+#'
+#' @details
+#' The report is formatted as a character vector so it can be printed directly
+#' (\code{cat(paste(summary, collapse = "\\n"))}) or written to file with
+#' \code{writeLines()}.
+#'
+#' It includes:
+#' \itemize{
+#'   \item overall run metadata and threshold used;
+#'   \item IC distribution summary;
+#'   \item per-cluster detail for consistent solutions;
+#'   \item interpretation notes for downstream reporting.
+#' }
 #'
 #' @param scice_results Results object from scICE_clustering function
 #' @param threshold IC threshold used for consistency (default: 1.005)

@@ -16,6 +16,11 @@ random_nz(X, rmix = TRUE)
 Randomized sparse matrix
 }
 \description{
-Helper function: Generate random matrix for null model
-Julia equivalent: random_nz(pre_df;rmix=true,mix_p=nothing)
+Generates a null matrix by shuffling non-zero values while preserving sparsity.
 }
+\details{
+The non-zero index pattern is kept fixed and values are permuted. Optional
+row shuffling (\code{rmix = TRUE}) adds additional structural perturbation for
+robustness and null-model comparisons.
+}
+\keyword{internal}

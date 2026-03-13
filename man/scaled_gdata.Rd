@@ -16,6 +16,11 @@ scaled_gdata(X, position_ = "mean")
 Scaled matrix
 }
 \description{
-Helper function: Scale data with centering
-Julia equivalent: scaled_gdata(X;dim=1, position_="mean")
+Centers and scales matrix columns using mean/SD or median/MAD.
 }
+\details{
+\code{position_ = "mean"} is sparse-aware and prefers matrix-friendly paths;
+\code{"median"} densifies as needed for robust statistics. Zero dispersion
+columns are guarded to avoid unstable scaling.
+}
+\keyword{internal}

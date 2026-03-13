@@ -14,6 +14,10 @@ proj_l(x)
 L1 normalized matrix
 }
 \description{
-Helper function: Project to simplex (L1 normalization)
-Julia equivalent: proj_l = x -> issparse(x) ? spdiagm(1 ./sum(x,dims=2)[:]) * x : x ./ sum(x,dims=2)
+Performs row-wise L1 normalization.
 }
+\details{
+Each row is divided by its row sum. Zero-sum rows are protected by replacing
+their denominator with 1 to avoid division-by-zero.
+}
+\keyword{internal}

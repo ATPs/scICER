@@ -16,6 +16,10 @@ tw_calculation(L, L_mp)
 List with Tracy-Widom parameters
 }
 \description{
-Helper function: Tracy-Widom calculation
-Julia equivalent: _tw(L, L_mp)
+Computes Tracy-Widom-inspired signal threshold from MP-filtered eigenvalues.
 }
+\details{
+Uses MP gamma and spectrum size to estimate fluctuation scale and derives
+\code{lambda_c}, the cutoff separating likely signal from noise components.
+}
+\keyword{internal}

@@ -51,7 +51,7 @@ cat("\n--- Installing Dependencies ---\n")
 core_deps <- c(
   "devtools", "roxygen2", "knitr", "rmarkdown",
   "Seurat", "SeuratObject", "igraph", "Matrix",
-  "parallel", "foreach", "doParallel", "dplyr",
+  "parallel",
   "ggplot2", "testthat"
 )
 

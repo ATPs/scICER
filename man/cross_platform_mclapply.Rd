@@ -19,6 +19,12 @@ cross_platform_mclapply(X, FUN, mc.cores = 1, ...)
 List of results
 }
 \description{
-Cross-platform parallel lapply wrapper
+Unified wrapper for parallel iteration on Unix and Windows.
+}
+\details{
+Uses \code{parallel::mclapply()} on Unix-like systems and falls back to
+sequential \code{lapply()} on Windows, where fork-based multiprocessing is
+unavailable. This keeps calling code portable and avoids repeated platform
+conditionals.
 }
 \keyword{internal}

@@ -7,6 +7,12 @@
 calculate_ic_from_extracted(clustering_array)
 }
 \description{
-Internal function to calculate IC from extracted clustering array
+Low-level implementation of IC scoring used by public wrappers.
+}
+\details{
+Given unique clustering outcomes and their probabilities, this function builds
+a symmetric pairwise ECS matrix and computes the probability-weighted sum.
+It is separated from \code{calculate_ic()} so internal workflows can reuse
+the same scoring logic without extra checks or conversions.
 }
 \keyword{internal}

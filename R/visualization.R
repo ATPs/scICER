@@ -1,6 +1,5 @@
 #' @import ggplot2
 #' @importFrom stats quantile median
-#' @importFrom methods inherits
 NULL
 
 #' Plot Inconsistency (IC) scores across different cluster numbers
@@ -8,6 +7,18 @@ NULL
 #' @description
 #' Creates a boxplot showing the distribution of IC scores for each cluster number 
 #' tested. Lower IC scores indicate more consistent clustering results.
+#'
+#' @details
+#' \code{plot_ic()} is typically the first diagnostic plot after
+#' \code{scICE_clustering()}:
+#' \itemize{
+#'   \item each x-position is a tested cluster number;
+#'   \item box/jitter values are bootstrap IC scores (\code{ic_vec});
+#'   \item the threshold line marks your chosen consistency cutoff.
+#' }
+#'
+#' If no valid IC values are available (for example all targets excluded),
+#' the function returns an informative empty plot instead of failing.
 #'
 #' @param scice_results Results object from scICE_clustering function
 #' @param threshold IC threshold line to display (default: 1.005)
@@ -101,7 +112,7 @@ plot_ic <- function(scice_results, threshold = 1.005, figure_size = c(10, 6),
       name = "Consistency",
       values = c("TRUE" = "lightgreen", "FALSE" = "lightgray"),
       labels = c("TRUE" = paste("Consistent (IC <", threshold, ")"), 
-                "FALSE" = paste("Inconsistent (IC ≥", threshold, ")"))
+                "FALSE" = paste("Inconsistent (IC >=", threshold, ")"))
     ) +
     ggplot2::geom_jitter(width = 0.2, alpha = 0.4, size = 0.8, height = 0) +
     ggplot2::scale_x_discrete(name = "Number of Clusters") +
@@ -153,6 +164,17 @@ plot_ic <- function(scice_results, threshold = 1.005, figure_size = c(10, 6),
 #' Extracts clustering labels for cluster numbers that meet the consistency threshold.
 #' Returns a data frame with cell names and cluster assignments for each consistent
 #' cluster number.
+#'
+#' @details
+#' Returned labels are converted to 1-based indexing for standard R usage.
+#' Output columns are:
+#' \itemize{
+#'   \item \code{cell_id}: cell names from the original Seurat object;
+#'   \item \code{clusters_<k>}: robust labels for consistent cluster number \code{k}.
+#' }
+#'
+#' If \code{return_seurat = TRUE}, these \code{clusters_<k>} columns are added to
+#' \code{meta.data} of the stored Seurat object in \code{scice_results}.
 #'
 #' @param scice_results Results object from scICE_clustering function
 #' @param threshold IC threshold for determining consistent clusters (default: 1.005)
@@ -264,6 +286,14 @@ get_robust_labels <- function(scice_results, threshold = 1.005, return_seurat = 
 #' Provides a summary of consistent clusters found by scICE analysis, including
 #' cluster numbers, IC scores, and other relevant statistics.
 #'
+#' @details
+#' The summary includes per-cluster median IC and optimization metadata, and
+#' adds bootstrap confidence intervals when \code{ic_vec} is available.
+#'
+#' For newer result objects containing exclusion metadata, aggregate counts
+#' (tested/excluded/inconsistent/consistent) are attached as attributes to the
+#' returned data frame.
+#'
 #' @param scice_results Results object from scICE_clustering function
 #' @param threshold IC threshold for determining consistent clusters (default: 1.005)
 #'
@@ -348,6 +378,18 @@ extract_consistent_clusters <- function(scice_results, threshold = 1.005) {
 }
 
 #' Plot clustering stability across resolution parameters
+#'
+#' @description
+#' Visualizes stability diagnostics from an \code{scICE} result object.
+#'
+#' @details
+#' Two modes are supported:
+#' \itemize{
+#'   \item \code{cluster_number = NULL}: scatter/line view of IC vs cluster number
+#'   across all tested solutions;
+#'   \item \code{cluster_number = k}: histogram of bootstrap IC scores for one
+#'   specific cluster number.
+#' }
 #'
 #' @param scice_results Results object from scICE_clustering function
 #' @param cluster_number Specific cluster number to plot (optional)

@@ -14,6 +14,10 @@ wishart_matrix(X)
 Wishart matrix (covariance matrix)
 }
 \description{
-Helper function: Compute Wishart matrix (covariance matrix)
-Julia equivalent: _wishart_matrix(X;device="cpu")
+Computes a Wishart-style covariance proxy \code{X X^T / p}.
 }
+\details{
+Converts sparse matrices to dense when needed and returns a symmetric matrix
+used by the RMT eigenspectrum steps in scLENS.
+}
+\keyword{internal}

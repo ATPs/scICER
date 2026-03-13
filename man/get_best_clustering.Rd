@@ -13,6 +13,11 @@ get_best_clustering(clustering_array)
 Best clustering labels
 }
 \description{
-Get the best clustering from extracted clustering array
+Selects a representative clustering from a set of unique outcomes.
+}
+\details{
+The selected solution is the one with the largest total similarity to all
+other unique outcomes (row-sum criterion on the pairwise ECS matrix).
+This heuristic favors the most central/stable partition among candidates.
 }
 \keyword{internal}

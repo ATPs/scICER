@@ -14,6 +14,11 @@ get_eigvec(X)
 List with eigenvalues and eigenvectors
 }
 \description{
-Helper function: Get eigenvalues and eigenvectors
-Julia equivalent: get_eigvec(X;device="gpu")
+Computes sorted positive eigenspectrum and projected eigenvectors.
 }
+\details{
+Chooses computation path based on matrix shape (\code{N > M} vs \code{N <= M})
+for efficiency, then projects vectors to the original space and normalizes
+columns where needed.
+}
+\keyword{internal}

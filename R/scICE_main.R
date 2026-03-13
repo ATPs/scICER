@@ -1,17 +1,9 @@
 #' @import Seurat
 #' @import SeuratObject
-#' @import igraph
 #' @import parallel
-#' @import foreach
-#' @import doParallel
-#' @importFrom methods inherits
-#' @importFrom stats setNames
-#' @importFrom utils getFromNamespace
-#' @importFrom foreach getDoParRegistered
-#' @importFrom parallel makeCluster stopCluster detectCores
-#' @importFrom doParallel registerDoParallel
-#' @importFrom igraph make_empty_graph add_edges E V vcount ecount cluster_leiden membership graph_from_adjacency_matrix edge_attr_names
-#'
+#' @importFrom igraph make_empty_graph add_edges E vcount ecount cluster_leiden membership
+NULL
+
 #' Single-cell Inconsistency-based Clustering Evaluation (scICE)
 #'
 #' @description
@@ -19,6 +11,25 @@
 #' in single-cell RNA-seq data. It generates multiple cluster labels using the Leiden 
 #' algorithm, calculates pairwise similarity with Element-Centric Similarity (ECS), 
 #' and provides automated framework for finding consistent clusters.
+#'
+#' @details
+#' Workflow overview:
+#' \enumerate{
+#'   \item extract a Seurat graph (for example \code{RNA_snn}) and convert to \pkg{igraph};
+#'   \item search resolution intervals for each requested cluster number;
+#'   \item run repeated Leiden trials and bootstrap consistency scoring;
+#'   \item compute IC/MEI metrics and identify stable cluster numbers.
+#' }
+#'
+#' Practical guidance:
+#' \itemize{
+#'   \item use \code{objective_function = "CPM"} for most medium/large datasets;
+#'   \item set \code{seed} for reproducible runs;
+#'   \item set \code{remove_threshold = Inf} to keep all searched cluster numbers
+#'   and skip inconsistency-based pre-filtering;
+#'   \item use \code{plot_ic()} and \code{extract_consistent_clusters()} to inspect
+#'   and report stable solutions.
+#' }
 #'
 #' @param object A Seurat object containing single-cell data
 #' @param graph_name Name of the graph to use for clustering. If NULL, will use the default SNN graph from the active assay (default: NULL)
@@ -104,6 +115,25 @@ scICE_clustering <- function(object,
                 graph_name, 
                 paste(names(object@graphs), collapse = ", ")))
   }
+
+  if (!is.numeric(n_workers) || length(n_workers) != 1 || is.na(n_workers)) {
+    stop("n_workers must be a single numeric value.")
+  }
+  if (n_workers < 1) {
+    stop("n_workers must be >= 1.")
+  }
+
+  requested_workers <- as.integer(n_workers)
+  detected_cores <- parallel::detectCores()
+  if (is.na(detected_cores) || detected_cores < 1) {
+    detected_cores <- 1L
+  }
+  max_workers <- if (detected_cores > 1L) detected_cores - 1L else 1L
+  effective_workers <- min(requested_workers, max_workers)
+  if (.Platform$OS.type == "windows") {
+    effective_workers <- 1L
+  }
+  n_workers <- max(1L, effective_workers)
   
   if (verbose) {
     start_time <- Sys.time()
@@ -119,7 +149,8 @@ scICE_clustering <- function(object,
     scice_message(paste("  Using graph:", graph_name))
     scice_message(paste("  Testing cluster range:", paste(cluster_range, collapse = ", ")))
     scice_message(paste("  Range: ", min(cluster_range), "-", max(cluster_range), " (", length(cluster_range), " values)"))
-    scice_message(paste("  Number of workers:", n_workers))
+    scice_message(paste("  Requested workers:", requested_workers))
+    scice_message(paste("  Effective workers:", n_workers))
     scice_message(paste("  Number of trials per resolution:", n_trials))
     scice_message(paste("  Number of bootstrap iterations:", n_bootstrap))
     scice_message(paste("  Random seed:", if(is.null(seed)) "NULL (random)" else seed))
@@ -133,36 +164,16 @@ scICE_clustering <- function(object,
     scice_message(paste(rep("-", 80), collapse = ""))
   }
   
-  # Set up parallel processing
+  # Parallel setup (mclapply backend in clustering_core.R)
   if (verbose) {
     scice_message("PARALLEL PROCESSING SETUP:")
-    scice_message(paste("  Detected cores:", detectCores()))
-    scice_message(paste("  Requested workers:", n_workers))
-    scice_message(paste("  Already registered:", getDoParRegistered()))
-  }
-  
-  if (n_workers > 1) {
-    if (!getDoParRegistered()) {
-      actual_workers <- min(n_workers, detectCores() - 1)
-      if (verbose) {
-        scice_message(paste("  Creating cluster with", actual_workers, "workers"))
-        scice_message(paste("  Thread setup: Creating parallel cluster"))
-        scice_message(paste("  Backend: doParallel with", actual_workers, "cores"))
-      }
-      cl <- parallel::makeCluster(actual_workers)
-      doParallel::registerDoParallel(cl)
-      on.exit(parallel::stopCluster(cl))
-      if (verbose) {
-        scice_message("  Parallel cluster created successfully")
-      }
+    scice_message(paste("  Detected cores:", detected_cores))
+    scice_message(paste("  Requested workers:", requested_workers))
+    scice_message(paste("  Effective workers:", n_workers))
+    if (n_workers == 1L) {
+      scice_message("  Running in sequential mode (effective n_workers = 1)")
     } else {
-      if (verbose) {
-        scice_message("  Using existing parallel backend")
-      }
-    }
-  } else {
-    if (verbose) {
-      scice_message("  Running in sequential mode (n_workers = 1)")
+      scice_message("  Using parallel::mclapply backend")
     }
   }
   
@@ -181,12 +192,18 @@ scICE_clustering <- function(object,
     scice_message(paste("  Graph class:", paste(class(graph), collapse = ", ")))
     scice_message(paste("  Graph dimensions:", nrow(graph), "x", ncol(graph)))
     scice_message(paste("  Graph storage type:", typeof(graph)))
-    if (inherits(graph, "dgCMatrix") || inherits(graph, "Matrix")) {
-      n_nonzero <- sum(graph > 0)
+    if (inherits(graph, "sparseMatrix")) {
+      n_nonzero <- length(graph@x)
       scice_message(paste("  Non-zero entries:", n_nonzero))
-      scice_message(paste("  Sparsity:", round((1 - n_nonzero / (nrow(graph) * ncol(graph))) * 100, 2), "%"))
+      total_entries <- as.numeric(nrow(graph)) * as.numeric(ncol(graph))
+      sparsity <- if (total_entries > 0) {
+        (1 - n_nonzero / total_entries) * 100
+      } else {
+        NA_real_
+      }
+      scice_message(paste("  Sparsity:", round(sparsity, 2), "%"))
       if (n_nonzero > 0) {
-        weights <- as.vector(graph[graph > 0])
+        weights <- graph@x
         scice_message(paste("  Weight range: [", round(min(weights), 4), ", ", round(max(weights), 4), "]", sep = ""))
         scice_message(paste("  Mean weight:", round(mean(weights), 4)))
       }

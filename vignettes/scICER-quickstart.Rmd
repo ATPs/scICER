@@ -174,9 +174,9 @@ if (length(scice_results$consistent_clusters) > 0) {
     cat("Available clusterings:", paste(names(cluster_labels), collapse = ", "), "\n")
     
     # Show first few rows of the most consistent clustering
-    first_clustering <- names(cluster_labels)[2]  # Skip cell names column
+    first_clustering <- names(cluster_labels)[2]  # Skip cell_id column
     cat("\nFirst 10 assignments for", first_clustering, ":\n")
-    print(head(cluster_labels[, c("cell_names", first_clustering)], 10))
+    print(head(cluster_labels[, c("cell_id", first_clustering)], 10))
   }
 } else {
   cat("No clusters meet the strict consistency threshold (IC < 1.005).\n")

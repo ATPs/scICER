@@ -5,15 +5,22 @@
 \title{Helper function: Compute eigendecomposition
 Julia equivalent: _get_eigen(Y;device="cpu")}
 \usage{
-get_eigen(Y)
+get_eigen(Y, k = NULL)
 }
 \arguments{
 \item{Y}{Symmetric matrix}
+
+\item{k}{Number of eigenvalues/vectors to compute (optional)}
 }
 \value{
 List with eigenvalues and eigenvectors
 }
 \description{
-Helper function: Compute eigendecomposition
-Julia equivalent: _get_eigen(Y;device="cpu")
+Computes eigenvalues/eigenvectors with optional partial decomposition.
 }
+\details{
+Prefers \pkg{RSpectra} for large matrices when available, with automatic
+fallback to base \code{eigen()} for robustness. Returns a consistent list
+interface regardless of backend.
+}
+\keyword{internal}

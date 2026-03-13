@@ -52,6 +52,20 @@ clustering_main(
 List with clustering results
 }
 \description{
-Core clustering algorithm implementing binary search and optimization
+Internal engine that executes the end-to-end scICER clustering workflow.
+}
+\details{
+Major stages:
+\enumerate{
+  \item clear cache and initialize run state;
+  \item search feasible resolution ranges per target cluster number;
+  \item optionally filter unstable targets (skipped when threshold is \code{Inf});
+  \item optimize each valid target via repeated Leiden trials and bootstrap IC;
+  \item merge successful/excluded entries into a compatibility-preserving result list.
+}
+
+The function includes extensive defensive handling for empty/failed branches,
+making it safe for large parameter sweeps where some targets may fail to
+converge.
 }
 \keyword{internal}

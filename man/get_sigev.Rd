@@ -16,6 +16,12 @@ get_sigev(X, Xr)
 List with signal eigenvalues, eigenvectors, and RMT parameters
 }
 \description{
-Helper function: Get significant eigenvalues using RMT
-Julia equivalent: get_sigev(X,Xr;device="gpu")
+Splits eigencomponents into signal and noise using RMT criteria.
 }
+\details{
+This routine combines MP filtering and Tracy-Widom thresholding to identify
+signal eigenvalues/eigenvectors from observed data relative to a randomized
+null matrix, and returns both signal and noise components for downstream
+robustness analysis.
+}
+\keyword{internal}

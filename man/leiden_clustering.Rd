@@ -30,6 +30,16 @@ leiden_clustering(
 Vector of cluster assignments (0-based)
 }
 \description{
-Perform Leiden clustering on an igraph object
+Internal wrapper around \code{igraph::cluster_leiden()} with consistent output.
+}
+\details{
+This helper standardizes two behaviors used throughout scICER:
+\itemize{
+  \item automatically passing edge weights when present;
+  \item returning integer cluster labels in 0-based indexing.
+}
+
+For \code{objective_function = "CPM"}, CPM mode is explicitly requested.
+For \code{"modularity"}, the same API is used with modularity semantics.
 }
 \keyword{internal}
