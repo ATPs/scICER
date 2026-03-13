@@ -126,7 +126,7 @@ plot_ic <- function(scice_results, threshold = 1.005, figure_size = c(10, 6),
       if (!is.finite(x)) {
         return("NA")
       }
-      format(signif(x, 6), trim = TRUE, scientific = TRUE)
+      format(round(x, 2), nsmall = 2, trim = TRUE, scientific = FALSE)
     }
     gamma_indices <- valid_indices[!is.na(scice_results$gamma[valid_indices])]
     if (length(gamma_indices) > 0) {

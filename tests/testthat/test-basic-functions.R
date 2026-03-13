@@ -344,7 +344,7 @@ test_that("optimize_clustering keeps raw labels and applies final-only merge", {
   expect_true(all(table(result$best_labels) >= 2L))
 })
 
-test_that("optimize_clustering admits gamma on any-hit and computes IC from all trials", {
+test_that("optimize_clustering admits gamma with any-hit plus median-window and computes IC from all trials", {
   ig <- igraph::make_ring(4)
   hit_labels <- c(0L, 0L, 1L, 1L)   # effective clusters (min=2): 2
   miss_labels <- c(0L, 1L, 2L, 3L)  # effective clusters (min=2): 0
@@ -381,8 +381,8 @@ test_that("optimize_clustering admits gamma on any-hit and computes IC from all 
     in_parallel_context = FALSE
   )
 
-  # Median effective count per gamma is 1 (from {2, 0}), so old median==target
-  # logic would reject all gammas. Any-hit admission should keep them valid.
+  # Median effective count per gamma is 1 (from {2, 0}); this satisfies
+  # |median-target| <= 1 and has a hit, so gamma is admitted.
   expect_false(is.null(result))
   expect_equal(length(result$labels$arr), 2L)
   expected_arr <- sort(c(
@@ -391,6 +391,47 @@ test_that("optimize_clustering admits gamma on any-hit and computes IC from all 
   ))
   observed_arr <- sort(vapply(result$labels$arr, paste, collapse = ",", character(1)))
   expect_equal(observed_arr, expected_arr)
+})
+
+test_that("optimize_clustering rejects gamma when median-window fails even with a hit trial", {
+  ig <- igraph::make_ring(4)
+  hit_labels <- c(0L, 0L, 1L, 1L)   # effective clusters (min=2): 2
+  miss_labels <- c(0L, 1L, 2L, 3L)  # effective clusters (min=2): 0
+  call_count <- 0L
+
+  local_mocked_bindings(
+    leiden_clustering = function(...) {
+      call_count <<- call_count + 1L
+      if (call_count == 1L) {
+        return(hit_labels)
+      }
+      miss_labels
+    },
+    .package = "scICER"
+  )
+
+  result <- scICER:::optimize_clustering(
+    igraph_obj = ig,
+    target_clusters = 2L,
+    gamma_range = c(0.1, 0.1),
+    objective_function = "modularity",
+    n_trials = 3L,
+    n_bootstrap = 2L,
+    seed = 123,
+    beta = 0.1,
+    n_iterations = 1L,
+    max_iterations = 3L,
+    resolution_tolerance = 1e-3,
+    n_workers = 1L,
+    snn_graph = Matrix::Diagonal(4),
+    min_cluster_size = 2L,
+    verbose = FALSE,
+    worker_id = "TEST",
+    in_parallel_context = FALSE
+  )
+
+  # Effective counts are {2, 0, 0}: has hit, but median is 0 so |0-2|=2 > 1.
+  expect_null(result)
 })
 
 test_that("plot_ic show_gamma controls selected-gamma subtitle", {

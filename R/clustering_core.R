@@ -2078,7 +2078,7 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
     scice_message(paste(worker_id, ":   Max iterations:", max_iterations))
     scice_message(paste(worker_id, ":   Beta:", beta))
     scice_message(paste(worker_id, ":   Leiden iterations:", n_iterations))
-    scice_message(paste(worker_id, ":   Gamma admission uses any-hit; IC uses all trials at admitted gamma"))
+    scice_message(paste(worker_id, ":   Gamma admission requires any-hit and |median effective clusters - target| <= 1; IC uses all trials at admitted gamma"))
     if (min_cluster_size > 1L) {
       scice_message(
         paste(
@@ -2225,12 +2225,15 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
       },
       integer(1)
     )
-    mean_clusters <- as.integer(stats::median(n_clusters_vec))
+    mean_clusters <- stats::median(n_clusters_vec)
     hit_trials <- which(n_clusters_vec == target_clusters)
     hit_count <- as.integer(length(hit_trials))
     hit_rate <- as.double(hit_count) / as.double(n_trials)
+    median_gap <- abs(mean_clusters - target_clusters)
+    within_median_window <- (median_gap <= 1)
+    gamma_admitted <- (hit_count >= 1L) && within_median_window
 
-    if (hit_count < 1L) {
+    if (!gamma_admitted) {
       rm(cluster_matrix)
       if (log_this_gamma) {
         gamma_elapsed <- as.numeric(difftime(Sys.time(), gamma_start_time, units = "secs"))
@@ -2239,7 +2242,9 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
             worker_id, ": Phase 1 progress gamma", gamma_idx, "/", length(gamma_sequence),
             "completed in", round(gamma_elapsed, 3), "seconds",
             "- median effective clusters =", mean_clusters,
+            "- median gap =", round(median_gap, 3),
             "- hit trials =", hit_count, "/", n_trials,
+            "- median-window pass =", within_median_window,
             "(target =", target_clusters, "; IC skipped)"
           )
         )
@@ -2248,6 +2253,8 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
         valid = FALSE,
         gamma = gamma_val,
         mean_clusters = mean_clusters,
+        median_gap = median_gap,
+        within_median_window = within_median_window,
         hit_count = hit_count,
         hit_rate = hit_rate
       ))
@@ -2272,7 +2279,9 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
           worker_id, ": Phase 1 progress gamma", gamma_idx, "/", length(gamma_sequence),
           "completed in", round(gamma_elapsed, 3), "seconds",
           "- median effective clusters =", mean_clusters,
+          "- median gap =", round(median_gap, 3),
           "- hit trials =", hit_count, "/", n_trials,
+          "- median-window pass =", within_median_window,
           "- IC (all trials) =", round(ic_score, 4)
         )
       )
@@ -2282,6 +2291,8 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
       valid = TRUE,
       gamma = gamma_val,
       mean_clusters = mean_clusters,
+      median_gap = median_gap,
+      within_median_window = within_median_window,
       hit_count = hit_count,
       hit_rate = hit_rate,
       ic = ic_score,
@@ -2319,20 +2330,31 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
     },
     integer(1)
   )
+  within_median_window_flags <- vapply(
+    gamma_results,
+    function(x) isTRUE(x$within_median_window),
+    logical(1)
+  )
   valid_flags <- vapply(gamma_results, function(x) isTRUE(x$valid), logical(1))
   
   if (verbose) {
-    scice_message(paste(worker_id, ": Phase 2 - Filtering for target effective cluster count (any-hit admission):", target_clusters))
+    scice_message(paste(worker_id, ": Phase 2 - Filtering for target effective cluster count (admission: any-hit + median window):", target_clusters))
     cluster_counts <- table(mean_clusters)
     for (i in 1:length(cluster_counts)) {
       count_val <- names(cluster_counts)[i]
       freq <- cluster_counts[i]
       scice_message(paste(worker_id, ":   ", freq, "gammas -> ", count_val, " effective clusters", sep = ""))
     }
+    scice_message(
+      paste(
+        worker_id, ":   gammas passing median window (|median-target|<=1):",
+        sum(within_median_window_flags), "/", length(gamma_results)
+      )
+    )
     admitted_count <- sum(valid_flags)
     scice_message(
       paste(
-        worker_id, ":   admitted gammas (>=1 target-hit trial):",
+        worker_id, ":   admitted gammas (>=1 target-hit trial and median-window pass):",
         admitted_count, "/", length(gamma_results)
       )
     )
@@ -2346,7 +2368,8 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
     }
   }
   
-  # Filter for target cluster number by any-hit rule
+  # Filter for target cluster number by admission rule:
+  # at least one target-hit trial and median effective count within +/-1.
   valid_indices <- which(valid_flags)
   
   if (length(valid_indices) == 0) {
@@ -2354,7 +2377,7 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
       scice_message(
         paste(
           worker_id,
-          ": ERROR - No gammas produced at least one target-hit trial for effective cluster count",
+          ": ERROR - No gammas satisfied both any-hit and median-window admission for effective cluster count",
           target_clusters
         )
       )
@@ -2366,7 +2389,7 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
     scice_message(
       paste(
         worker_id, ": Found", length(valid_indices),
-        "gammas with at least one target-hit trial for", target_clusters, "effective clusters"
+        "gammas satisfying any-hit + median-window admission for", target_clusters, "effective clusters"
       )
     )
     scice_message(paste(worker_id, ": Phase 3 - IC scores already computed during Phase 1 for valid gammas (all trials per admitted gamma)"))

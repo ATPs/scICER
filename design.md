@@ -23,7 +23,7 @@ This description matches the code on `main` at commit `0d07f1d`.
 4. Optionally filter unstable `k` values.
 5. For each remaining `k`, run intensive optimization:
    - evaluate many gamma values,
-   - keep gammas where at least one trial hits target `k` (effective count),
+   - keep gammas only if both hold: at least one trial hits target `k` (effective count) and `abs(median(effective_counts) - k) <= 1`,
    - compute IC using all trials for each admitted gamma,
    - compute IC/MEI stability metrics,
    - select `best_labels`.
@@ -340,17 +340,20 @@ This is the most expensive part.
   - compute median effective cluster count across trials,
   - identify hit trials where effective count equals target `k`,
   - if no hit trial exists, mark invalid and skip IC,
-  - if at least one hit exists, compute IC from all trials and keep the full trial matrix reference.
+  - if hit exists but `abs(median(effective_counts) - k) > 1`, also mark invalid and skip IC,
+  - if both checks pass, compute IC from all trials and keep the full trial matrix reference.
 
 Critical point:
 
-- Gamma admission uses an **any-hit rule** (`hit_count >= 1`), including single-hit cases.
-- If no gamma has any hit trial, optimization returns `NULL` for that `k`.
+- Gamma admission uses a **dual rule**:
+  - `hit_count >= 1` (any-hit, including single-hit cases), and
+  - `abs(median(effective_counts) - target_k) <= 1`.
+- If no gamma satisfies both conditions, optimization returns `NULL` for that `k`.
 
 #### 5.6.2 Phase 2: target-count filtering
 
 - summarize how many gamma values produced each effective count,
-- keep only gammas admitted by the any-hit rule.
+- keep only gammas admitted by the dual rule above.
 
 #### 5.6.3 Phase 3: best gamma selection
 
@@ -471,7 +474,7 @@ Common patterns:
 Symptoms in logs:
 
 - many lines like `median effective clusters = 0` with very high raw clusters,
-- final errors about no gamma having target-hit trials for effective cluster count `X`,
+- final errors about no gamma satisfying hit + median-window admission for effective cluster count `X`,
 - final result vectors length `0`.
 
 ## 9. Relationship to Seurat Resolution/Gamma
