@@ -37,6 +37,7 @@ test_that("scICE_clustering verbose emits startup, checkpoint, and completion lo
   expect_true(any(grepl("Phase 1 progress", captured$messages, fixed = TRUE)))
   expect_true(any(grepl("Phase 1 completed", captured$messages, fixed = TRUE)))
   expect_true(any(grepl("Phase 5 progress", captured$messages, fixed = TRUE)))
+  expect_true(any(grepl("Optimization scheduling - dynamic worker queue", captured$messages, fixed = TRUE)))
   expect_true(any(grepl("Long step started - extracting sparse entries from matrix slots", captured$messages, fixed = TRUE)))
   expect_true(any(grepl("Long step started - constructing igraph edge structure", captured$messages, fixed = TRUE)))
   expect_true(any(grepl("ANALYSIS COMPLETE", captured$messages, fixed = TRUE)))

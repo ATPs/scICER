@@ -11,7 +11,7 @@ It covers:
 - the internal function call chain and behavior of each major helper,
 - runtime, parallelism, memory, and failure modes.
 
-This description matches the code on `main` at commit `0d07f1d`.
+This description matches the code on `main` after the parallel scheduling update on 2026-03-13.
 
 ## 2. Quick Mental Model
 
@@ -100,7 +100,10 @@ scICE_clustering(
 - Consequences of change:
   - usually faster up to a point,
   - too high can increase memory pressure and scheduling overhead,
-  - nested stages may internally downscale worker counts.
+  - optimization now splits this budget into:
+    - active outer cluster workers (`k`-level queue),
+    - per-cluster nested workers for gamma/bootstrap,
+  - outer optimization uses dynamic queue scheduling (`mc.preschedule = FALSE`) to reduce long-tail imbalance.
 
 ### 3.5 `n_trials`
 
@@ -263,6 +266,8 @@ Stages:
 3. call `find_resolution_ranges()` for all target `k`,
 4. optional filtering stage (skipped when `remove_threshold = Inf`),
 5. call `optimize_clustering()` per valid `k` in parallel,
+   - worker layout is computed as outer `k` workers + per-`k` nested budget,
+   - outer `k` tasks run with dynamic queue scheduling to reduce stragglers,
 6. compute MEI for successful branches,
 7. merge successful and excluded entries and return compatibility list.
 
@@ -426,7 +431,9 @@ One-pass deterministic merge logic:
 
 ### 6.6 Parallel and runtime utilities
 
-- `cross_platform_mclapply()`: `mclapply` on Unix, `lapply` on Windows.
+- `cross_platform_mclapply()`:
+  - `mclapply` on Unix and `lapply` on Windows,
+  - supports `mc.preschedule` on Unix callers.
 - heartbeat:
   - `get_heartbeat_interval_seconds()` reads `options("scICER.internal_heartbeat_seconds")`, default 60s,
   - `create_heartbeat_logger()` throttles periodic liveness logs.
@@ -435,6 +442,14 @@ One-pass deterministic merge logic:
   - `create_runtime_context()`,
   - `activate_runtime_spill()` with `qs`,
   - `store/load/release_cluster_matrix()`.
+
+Optimization-stage worker allocation details:
+
+- starts from memory-capped optimization worker budget,
+- computes active outer `k` workers,
+- reserves minimum nested workers per `k` for heavy settings (based on `n_trials`/`n_bootstrap`),
+- recomputes per-cluster budget and enforces `outer_workers * per_cluster_budget <= total_budget`,
+- runs outer `k` loop with dynamic queue (`mc.preschedule = FALSE`).
 
 ## 7. Runtime and Scaling Characteristics
 

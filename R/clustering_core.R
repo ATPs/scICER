@@ -279,16 +279,17 @@ get_cache_stats <- function() {
 #' @param X Vector/list to iterate over
 #' @param FUN Function to apply
 #' @param mc.cores Number of cores (ignored on Windows)
+#' @param mc.preschedule Whether to preschedule chunks for fork workers (Unix only)
 #' @param ... Additional arguments to FUN
 #' @return List of results
 #' @keywords internal
-cross_platform_mclapply <- function(X, FUN, mc.cores = 1, ...) {
+cross_platform_mclapply <- function(X, FUN, mc.cores = 1, mc.preschedule = TRUE, ...) {
   if (.Platform$OS.type == "windows") {
     # Use regular lapply on Windows
     return(lapply(X, FUN, ...))
   } else {
     # Use mclapply on Unix-like systems
-    return(parallel::mclapply(X, FUN, mc.cores = mc.cores, ...))
+    return(parallel::mclapply(X, FUN, mc.cores = mc.cores, mc.preschedule = mc.preschedule, ...))
   }
 }
 
@@ -1030,6 +1031,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   
   # Windows compatibility for clustering optimization
   actual_workers_opt <- if (.Platform$OS.type == "windows" && n_workers > 1) 1 else n_workers
+  active_cluster_workers_opt <- 1L
   per_cluster_worker_budget <- 1L
 
   if (length(valid_clusters) > 0) {
@@ -1052,11 +1054,41 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
     ))
     actual_workers_opt <- cap_workers_by_memory(actual_workers_opt, max_cluster_bytes, runtime_context)
     active_cluster_workers_opt <- max(1L, min(as.integer(length(valid_clusters)), as.integer(actual_workers_opt)))
+
+    # Reserve a minimum nested budget per cluster for heavy workloads to reduce long-tail stragglers.
+    min_inner_workers <- if (n_bootstrap >= 200L || n_trials >= 30L) {
+      4L
+    } else if (n_bootstrap >= 100L || n_trials >= 20L) {
+      3L
+    } else {
+      2L
+    }
+    if (actual_workers_opt > 1L && length(valid_clusters) > 1L) {
+      max_outer_workers_for_inner_budget <- max(
+        1L,
+        as.integer(floor(as.double(actual_workers_opt) / as.double(min_inner_workers)))
+      )
+      active_cluster_workers_opt <- max(
+        1L,
+        min(active_cluster_workers_opt, max_outer_workers_for_inner_budget)
+      )
+    }
+
     per_cluster_worker_budget <- max(1L, as.integer(floor(as.double(actual_workers_opt) / active_cluster_workers_opt)))
     per_cluster_worker_budget <- cap_workers_by_memory(
       per_cluster_worker_budget,
       estimate_trial_matrix_bytes(n_vertices, n_trials, 1L),
       runtime_context
+    )
+
+    # Keep outer x inner worker product within global worker cap.
+    active_cluster_workers_opt <- max(
+      1L,
+      min(
+        as.integer(length(valid_clusters)),
+        as.integer(actual_workers_opt),
+        as.integer(floor(as.double(actual_workers_opt) / as.double(per_cluster_worker_budget)))
+      )
     )
 
     if (should_enable_spill(runtime_context, max_cluster_bytes)) {
@@ -1066,7 +1098,9 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   
   if (verbose) {
     scice_message(paste("CLUSTERING_MAIN: Using", actual_workers_opt, "workers for optimization"))
+    scice_message(paste("CLUSTERING_MAIN: Active cluster workers:", active_cluster_workers_opt))
     scice_message(paste("CLUSTERING_MAIN: Per-cluster worker budget:", per_cluster_worker_budget))
+    scice_message("CLUSTERING_MAIN: Optimization scheduling - dynamic worker queue (mc.preschedule = FALSE)")
     scice_message(paste("CLUSTERING_MAIN: Progress tracking:"))
     progress_start_time <- Sys.time()
     
@@ -1136,7 +1170,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
       ))
     }
     return(NULL)
-  }, mc.cores = actual_workers_opt)
+  }, mc.cores = active_cluster_workers_opt, mc.preschedule = FALSE)
   
   if (verbose) {
     optimization_time <- as.numeric(difftime(Sys.time(), optimization_start, units = "secs"))
