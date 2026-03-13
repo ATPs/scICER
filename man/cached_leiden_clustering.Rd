@@ -12,7 +12,9 @@ cached_leiden_clustering(
   beta,
   initial_membership = NULL,
   use_cache = TRUE,
-  cache_key_suffix = ""
+  cache_key_suffix = "",
+  snn_graph = NULL,
+  min_cluster_size = 1L
 )
 }
 \arguments{
@@ -31,6 +33,10 @@ cached_leiden_clustering(
 \item{use_cache}{Whether to use caching (default: TRUE)}
 
 \item{cache_key_suffix}{Additional suffix for cache key (default: "")}
+
+\item{snn_graph}{Seurat SNN graph matrix used for minimum-size cluster merging}
+
+\item{min_cluster_size}{Minimum required cells per cluster}
 }
 \value{
 Vector of cluster assignments (0-based)

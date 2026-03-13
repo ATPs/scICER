@@ -23,6 +23,7 @@ test_that("scICE_clustering verbose emits startup, checkpoint, and completion lo
       n_bootstrap = 5,
       seed = 123,
       remove_threshold = Inf,
+      min_cluster_size = 1,
       verbose = TRUE
     )
   )

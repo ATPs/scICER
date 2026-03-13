@@ -18,6 +18,7 @@ scICE_clustering(
   ic_threshold = Inf,
   objective_function = "CPM",
   remove_threshold = 1.15,
+  min_cluster_size = 5,
   resolution_tolerance = 1e-08,
   verbose = TRUE
 )
@@ -49,6 +50,11 @@ scICE_clustering(
 
 \item{remove_threshold}{Threshold for removing inconsistent results (default: 1.15)}
 
+\item{min_cluster_size}{Minimum number of cells required per cluster. Clusters
+smaller than this threshold are iteratively merged into nearest neighboring
+clusters based on SNN connectivity. Set to \code{1} to disable merging.
+Default: \code{5}. A value of \code{2} approximates Seurat singleton behavior.}
+
 \item{resolution_tolerance}{Tolerance for resolution parameter search (default: 1e-8)}
 
 \item{verbose}{Whether to print progress messages (default: TRUE)}
@@ -65,6 +71,7 @@ A list containing:
   \item{n_iter}{Number of iterations used}
   \item{mei}{Mutual Element-wise Information scores}
   \item{consistent_clusters}{Cluster numbers meeting consistency threshold}
+  \item{min_cluster_size}{Minimum cluster size used for iterative small-cluster merging}
 }
 }
 \description{

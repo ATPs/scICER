@@ -118,6 +118,7 @@ test_that("get_robust_labels requires explicit Seurat object for return_seurat",
     n_bootstrap = 2,
     seed = 123,
     remove_threshold = Inf,
+    min_cluster_size = 1,
     verbose = FALSE
   )
 
@@ -154,6 +155,7 @@ test_that("get_robust_labels keeps backward compatibility for old results", {
     n_bootstrap = 2,
     seed = 123,
     remove_threshold = Inf,
+    min_cluster_size = 1,
     verbose = FALSE
   )
   results$seurat_object <- pbmc_small
@@ -162,4 +164,151 @@ test_that("get_robust_labels keeps backward compatibility for old results", {
     get_robust_labels(results, threshold = Inf, return_seurat = TRUE),
     "deprecated"
   )
+})
+
+test_that("merge_small_clusters_to_neighbors prioritizes eligible target clusters", {
+  labels <- c(0L, 0L, 0L, 0L, 0L, 1L, 2L, 2L)
+  snn <- matrix(0, nrow = 8, ncol = 8)
+
+  # Cell 6 (singleton) is closer to cluster 2, but cluster 2 is undersized.
+  snn[6, 1:5] <- 1
+  snn[1:5, 6] <- 1
+  snn[6, 7:8] <- 10
+  snn[7:8, 6] <- 10
+
+  merged <- scICER:::merge_small_clusters_to_neighbors(
+    labels = labels,
+    snn_graph = Matrix::Matrix(snn, sparse = TRUE),
+    min_cluster_size = 3L
+  )
+
+  expect_equal(merged[6], merged[1])
+  final_sizes <- table(merged)
+  expect_true(length(final_sizes) == 1L || min(final_sizes) >= 3L)
+})
+
+test_that("merge_small_clusters_to_neighbors iterates until no undersized clusters remain", {
+  labels <- c(0L, 0L, 1L, 1L, 2L)
+  snn <- matrix(0, nrow = 5, ncol = 5)
+
+  # Cluster 2 singleton prefers cluster 1 in the first merge.
+  snn[5, 3:4] <- 5
+  snn[3:4, 5] <- 5
+  snn[5, 1:2] <- 1
+  snn[1:2, 5] <- 1
+
+  merged <- scICER:::merge_small_clusters_to_neighbors(
+    labels = labels,
+    snn_graph = Matrix::Matrix(snn, sparse = TRUE),
+    min_cluster_size = 3L
+  )
+
+  final_sizes <- table(merged)
+  expect_true(length(final_sizes) == 1L || min(final_sizes) >= 3L)
+})
+
+test_that("merge_small_clusters_to_neighbors uses fixed-seed tie breaking", {
+  labels <- c(0L, 0L, 0L, 1L, 1L, 1L, 2L)
+  snn <- matrix(0, nrow = 7, ncol = 7)
+
+  # Singleton (cell 7) ties exactly between cluster 0 and 1.
+  snn[7, 1:3] <- 2
+  snn[1:3, 7] <- 2
+  snn[7, 4:6] <- 2
+  snn[4:6, 7] <- 2
+
+  graph <- Matrix::Matrix(snn, sparse = TRUE)
+  set.seed(999)
+  merged_a <- scICER:::merge_small_clusters_to_neighbors(labels, graph, min_cluster_size = 2L)
+  set.seed(1234)
+  merged_b <- scICER:::merge_small_clusters_to_neighbors(labels, graph, min_cluster_size = 2L)
+
+  expected_target <- local({
+    has_seed <- exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
+    if (has_seed) {
+      old_seed <- get(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
+    }
+    on.exit({
+      if (has_seed) {
+        assign(".Random.seed", old_seed, envir = .GlobalEnv)
+      } else if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+        rm(".Random.seed", envir = .GlobalEnv)
+      }
+    }, add = TRUE)
+    set.seed(1)
+    as.integer(sample(c(0L, 1L), size = 1))
+  })
+
+  expect_equal(merged_a, merged_b)
+  expect_equal(merged_a[7], expected_target)
+})
+
+test_that("scICE_clustering validates min_cluster_size and preserves legacy mode", {
+  data("pbmc_small", package = "SeuratObject")
+
+  expect_error(
+    scICE_clustering(
+      object = pbmc_small,
+      graph_name = "RNA_snn",
+      min_cluster_size = 0,
+      n_workers = 1,
+      n_trials = 1,
+      n_bootstrap = 1,
+      verbose = FALSE
+    ),
+    "min_cluster_size must be >= 1"
+  )
+
+  expect_error(
+    scICE_clustering(
+      object = pbmc_small,
+      graph_name = "RNA_snn",
+      min_cluster_size = 1.5,
+      n_workers = 1,
+      n_trials = 1,
+      n_bootstrap = 1,
+      verbose = FALSE
+    ),
+    "must be an integer"
+  )
+
+  result <- scICE_clustering(
+    object = pbmc_small,
+    graph_name = "RNA_snn",
+    cluster_range = 2:3,
+    n_workers = 1,
+    n_trials = 2,
+    n_bootstrap = 2,
+    seed = 123,
+    remove_threshold = Inf,
+    min_cluster_size = 1,
+    verbose = FALSE
+  )
+
+  expect_equal(result$min_cluster_size, 1L)
+})
+
+test_that("scICE_clustering enforces min_cluster_size on best labels", {
+  data("pbmc_small", package = "SeuratObject")
+
+  result <- scICE_clustering(
+    object = pbmc_small,
+    graph_name = "RNA_snn",
+    cluster_range = 1:2,
+    n_workers = 1,
+    n_trials = 2,
+    n_bootstrap = 2,
+    seed = 123,
+    remove_threshold = Inf,
+    min_cluster_size = 5,
+    verbose = FALSE
+  )
+
+  non_null_labels <- Filter(Negate(is.null), result$best_labels)
+  expect_true(length(non_null_labels) > 0)
+
+  for (label_vec in non_null_labels) {
+    cluster_sizes <- table(label_vec)
+    expect_true(length(cluster_sizes) == 1L || min(cluster_sizes) >= 5L)
+  }
 })

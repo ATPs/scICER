@@ -117,6 +117,7 @@ scice_results <- scICE_clustering(
   n_workers = 2,                 # Use 2 cores
   n_trials = 8,                  # Reduced for faster computation
   n_bootstrap = 20,              # Reduced for faster computation
+  min_cluster_size = 5,          # Merge clusters smaller than 5 cells
   verbose = TRUE
 )
 
@@ -318,6 +319,7 @@ scice_results_highres <- scICE_clustering(
 - **cluster_range**: Start with 2 to 2-3× your expected number of cell types
 - **n_workers**: Use `detectCores() - 1` for maximum speed
 - **ic_threshold**: 1.005 (strict), 1.01 (moderate), 1.02 (lenient)
+- **min_cluster_size**: 5 by default; set 2 to mimic singleton handling, set 1 to disable merging
 - **objective_function**: "CPM" for most cases, "modularity" for small datasets
 
 ## 2. Interpreting Results

@@ -44,6 +44,10 @@ NULL
 #' @param ic_threshold IC threshold for consistent clustering (default: Inf)
 #' @param objective_function Objective function for Leiden ("modularity" or "CPM", default: "CPM")
 #' @param remove_threshold Threshold for removing inconsistent results (default: 1.15)
+#' @param min_cluster_size Minimum number of cells required per cluster. Clusters
+#'   smaller than this threshold are iteratively merged into nearest neighboring
+#'   clusters based on SNN connectivity. Set to \code{1} to disable merging.
+#'   Default: \code{5}. A value of \code{2} approximates Seurat singleton behavior.
 #' @param resolution_tolerance Tolerance for resolution parameter search (default: 1e-8)
 #' @param verbose Whether to print progress messages (default: TRUE)
 #'
@@ -58,6 +62,7 @@ NULL
 #'   \item{n_iter}{Number of iterations used}
 #'   \item{mei}{Mutual Element-wise Information scores}
 #'   \item{consistent_clusters}{Cluster numbers meeting consistency threshold}
+#'   \item{min_cluster_size}{Minimum cluster size used for iterative small-cluster merging}
 #' }
 #'
 #' @examples
@@ -90,6 +95,7 @@ scICE_clustering <- function(object,
                             ic_threshold = Inf,
                             objective_function = "CPM",
                             remove_threshold = 1.15,
+                            min_cluster_size = 5,
                             resolution_tolerance = 1e-8,
                             verbose = TRUE) {
   
@@ -121,6 +127,17 @@ scICE_clustering <- function(object,
   }
   if (n_workers < 1) {
     stop("n_workers must be >= 1.")
+  }
+
+  if (!is.numeric(min_cluster_size) || length(min_cluster_size) != 1 || is.na(min_cluster_size)) {
+    stop("min_cluster_size must be a single numeric value.")
+  }
+  if (abs(min_cluster_size - round(min_cluster_size)) > .Machine$double.eps^0.5) {
+    stop("min_cluster_size must be an integer >= 1.")
+  }
+  min_cluster_size <- as.integer(round(min_cluster_size))
+  if (min_cluster_size < 1L) {
+    stop("min_cluster_size must be >= 1.")
   }
 
   requested_workers <- as.integer(n_workers)
@@ -164,6 +181,7 @@ scICE_clustering <- function(object,
     scice_message(paste("  IC threshold:", ic_threshold))
     scice_message(paste("  Objective function:", objective_function))
     scice_message(paste("  Remove threshold:", remove_threshold))
+    scice_message(paste("  Minimum cluster size:", min_cluster_size))
     scice_message(paste("  Resolution tolerance:", resolution_tolerance))
     scice_message(paste(rep("-", 80), collapse = ""))
   }
@@ -264,6 +282,8 @@ scICE_clustering <- function(object,
     max_iterations = max_iterations,
     objective_function = objective_function,
     remove_threshold = remove_threshold,
+    snn_graph = graph,
+    min_cluster_size = min_cluster_size,
     resolution_tolerance = resolution_tolerance,
     verbose = verbose,
     in_parallel_context = FALSE,
@@ -366,6 +386,7 @@ scICE_clustering <- function(object,
   
   # Keep lightweight result object (do not store full Seurat object)
   results$graph_name <- graph_name
+  results$min_cluster_size <- min_cluster_size
   
   class(results) <- "scICE"
   return(results)

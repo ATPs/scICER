@@ -14,6 +14,8 @@ find_resolution_ranges(
   n_workers,
   verbose,
   seed = NULL,
+  snn_graph = NULL,
+  min_cluster_size = 1L,
   in_parallel_context = FALSE,
   runtime_context = NULL
 )
@@ -36,6 +38,10 @@ find_resolution_ranges(
 \item{verbose}{Whether to print progress diagnostics}
 
 \item{seed}{Optional deterministic seed}
+
+\item{snn_graph}{Seurat SNN graph matrix for minimum-size cluster merging}
+
+\item{min_cluster_size}{Minimum required cells per cluster}
 
 \item{in_parallel_context}{Whether called from an outer parallel worker}
 

@@ -16,6 +16,8 @@ clustering_main(
   max_iterations,
   objective_function,
   remove_threshold,
+  snn_graph = NULL,
+  min_cluster_size = 1L,
   resolution_tolerance,
   verbose,
   in_parallel_context = FALSE,
@@ -44,6 +46,10 @@ clustering_main(
 \item{objective_function}{Objective function ("modularity" or "CPM")}
 
 \item{remove_threshold}{Threshold for removing inconsistent results}
+
+\item{snn_graph}{Seurat SNN graph matrix for minimum-size cluster merging}
+
+\item{min_cluster_size}{Minimum required cells per cluster}
 
 \item{resolution_tolerance}{Tolerance for resolution parameter search}
 

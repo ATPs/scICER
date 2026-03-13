@@ -17,6 +17,8 @@ optimize_clustering(
   max_iterations,
   resolution_tolerance,
   n_workers,
+  snn_graph = NULL,
+  min_cluster_size = 1L,
   verbose = FALSE,
   worker_id = "OPTIMIZER",
   in_parallel_context = FALSE,
@@ -47,6 +49,10 @@ optimize_clustering(
 \item{resolution_tolerance}{Resolution tolerance for gamma sequence logic}
 
 \item{n_workers}{Requested worker count}
+
+\item{snn_graph}{Seurat SNN graph matrix for minimum-size cluster merging}
+
+\item{min_cluster_size}{Minimum required cells per cluster}
 
 \item{verbose}{Whether to print diagnostics}
 
