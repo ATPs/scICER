@@ -400,6 +400,43 @@ test_that("find_resolution_ranges target matching uses effective cluster count",
   expect_equal(call_count, 1L)
 })
 
+test_that("find_resolution_ranges avoids drifting into all-small high-gamma regime", {
+  ig <- igraph::make_ring(8)
+
+  local_mocked_bindings(
+    cached_leiden_clustering = function(igraph_obj, resolution, ...) {
+      if (resolution < 30) {
+        return(c(rep(0L, 4), rep(1L, 4)))
+      }
+      if (resolution <= 60) {
+        return(rep(0:3, each = 2))
+      }
+      0:7
+    },
+    .package = "scICER"
+  )
+
+  ranges <- scICER:::find_resolution_ranges(
+    igraph_obj = ig,
+    cluster_range = 4L,
+    start_g = 0,
+    end_g = 100,
+    objective_function = "modularity",
+    resolution_tolerance = 1.0,
+    n_workers = 1,
+    verbose = FALSE,
+    snn_graph = Matrix::Diagonal(8),
+    min_cluster_size = 2L
+  )
+
+  expect_true("4" %in% names(ranges))
+  bounds <- ranges[["4"]]
+  expect_true(is.numeric(bounds))
+  expect_true(length(bounds) == 2L)
+  expect_true(bounds[1] < bounds[2])
+  expect_lt(bounds[2], 80)
+})
+
 test_that("find_resolution_ranges falls back to full preliminary trials when no hit exists", {
   ig <- igraph::make_ring(4)
   call_count <- 0L

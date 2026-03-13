@@ -1494,7 +1494,7 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
             )
           })
           launched_trials <- launched_trials + 1L
-          n_clusters <- run_single_trial_count(
+          trial_result <- run_single_trial_count(
             trial_idx = trial_idx,
             gamma_val = gamma_val,
             cache_suffix_base = cache_suffix_base,
@@ -1502,7 +1502,11 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
             use_cache = TRUE,
             use_trial_suffix = FALSE
           )
+          trial_pair <- unpack_trial_counts(trial_result, trial_idx_for_error = trial_idx)
+          n_clusters <- as.integer(trial_pair[["effective"]])
+          raw_clusters <- as.integer(trial_pair[["raw"]])
           trial_counts <- c(trial_counts, n_clusters)
+          raw_trial_counts <- c(raw_trial_counts, raw_clusters)
           completed_trials <- completed_trials + 1L
           heartbeat(function() {
             paste(
@@ -1614,19 +1618,15 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
               )
             }
             
-            n_clusters <- as.integer(trial_value[1])
-            if (length(n_clusters) != 1L || is.na(n_clusters)) {
-              stop(
-                paste(
-                  "Invalid preliminary trial output for k =", target_clusters,
-                  "phase =", phase_label,
-                  "iteration =", iteration_idx,
-                  "trial =", trial_idx
-                )
-              )
-            }
+            trial_pair <- unpack_trial_counts(
+              trial_value,
+              trial_idx_for_error = trial_idx
+            )
+            n_clusters <- as.integer(trial_pair[["effective"]])
+            raw_clusters <- as.integer(trial_pair[["raw"]])
             
             trial_counts <- c(trial_counts, n_clusters)
+            raw_trial_counts <- c(raw_trial_counts, raw_clusters)
             completed_trials <- completed_trials + 1L
             
             if (n_clusters == target_clusters && !early_stop) {
@@ -1661,17 +1661,14 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
                 )
               )
             }
-            n_clusters <- as.integer(trial_value[1])
-            if (length(n_clusters) != 1L || is.na(n_clusters)) {
-              stop(
-                paste(
-                  "Invalid preliminary trial output for k =", target_clusters,
-                  "phase =", phase_label,
-                  "iteration =", iteration_idx
-                )
-              )
-            }
+            trial_pair <- unpack_trial_counts(
+              trial_value,
+              trial_idx_for_error = NA_integer_
+            )
+            n_clusters <- as.integer(trial_pair[["effective"]])
+            raw_clusters <- as.integer(trial_pair[["raw"]])
             trial_counts <- c(trial_counts, n_clusters)
+            raw_trial_counts <- c(raw_trial_counts, raw_clusters)
             completed_trials <- completed_trials + 1L
           }
           active_jobs <- list()
@@ -1695,6 +1692,11 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
       } else {
         as.numeric(stats::median(trial_counts))
       }
+      raw_clusters_obtained <- if (length(raw_trial_counts) == 0L) {
+        n_clusters_obtained
+      } else {
+        as.numeric(stats::median(raw_trial_counts))
+      }
       elapsed_seconds <- as.numeric(difftime(Sys.time(), step_start_time, units = "secs"))
       
       if (verbose) {
@@ -1717,7 +1719,8 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
               phase_label, "step", iteration_idx,
               "- all trials completed",
               "(completed", completed_trials, "/", n_preliminary_trials, ")",
-              "- median fallback clusters =", signif(n_clusters_obtained, 6),
+              "- median fallback effective clusters =", signif(n_clusters_obtained, 6),
+              "- median fallback raw clusters =", signif(raw_clusters_obtained, 6),
               "- elapsed", round(elapsed_seconds, 3), "s"
             )
           )
@@ -1726,6 +1729,7 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
       
       list(
         n_clusters_obtained = n_clusters_obtained,
+        raw_clusters_obtained = raw_clusters_obtained,
         early_stop = early_stop,
         completed_trials = completed_trials,
         killed_trials = killed_trials,
@@ -1774,6 +1778,7 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
       )
       
       n_clusters_obtained <- cluster_results$n_clusters_obtained
+      raw_clusters_obtained <- cluster_results$raw_clusters_obtained
       trial_steps <- trial_steps + 1L
       if (cluster_results$early_stop) {
         early_stop_count <- early_stop_count + 1L
@@ -1793,15 +1798,20 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
             "RESOLUTION_SEARCH: k =", target_clusters,
             "lower-bound progress", iteration_count, "/", max_iterations,
             "- gamma =", signif(gamma_val, 6),
-            "- median clusters =", n_clusters_obtained,
+            "- median effective clusters =", n_clusters_obtained,
+            "- median raw clusters =", raw_clusters_obtained,
             "- interval span =", signif(interval_span, 6)
           )
         )
       }
       
-      if (n_clusters_obtained < target_clusters) {
+      if (n_clusters_obtained >= target_clusters) {
+        right <- mid
+      } else if (raw_clusters_obtained < target_clusters) {
         left <- mid
       } else {
+        # Over-fragmented regime: raw clusters are high but effective clusters drop
+        # below target due min_cluster_size filtering; move to lower gamma.
         right <- mid
       }
     }
@@ -1848,6 +1858,7 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
       )
       
       n_clusters_obtained <- cluster_results$n_clusters_obtained
+      raw_clusters_obtained <- cluster_results$raw_clusters_obtained
       trial_steps <- trial_steps + 1L
       if (cluster_results$early_stop) {
         early_stop_count <- early_stop_count + 1L
@@ -1867,16 +1878,20 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
             "RESOLUTION_SEARCH: k =", target_clusters,
             "upper-bound progress", iteration_count, "/", max_iterations,
             "- gamma =", signif(gamma_val, 6),
-            "- median clusters =", n_clusters_obtained,
+            "- median effective clusters =", n_clusters_obtained,
+            "- median raw clusters =", raw_clusters_obtained,
             "- interval span =", signif(interval_span, 6)
           )
         )
       }
       
-      if (n_clusters_obtained > target_clusters) {
-        right <- mid
-      } else {
+      if (n_clusters_obtained >= target_clusters) {
         left <- mid
+      } else if (raw_clusters_obtained < target_clusters) {
+        left <- mid
+      } else {
+        # Over-fragmented regime: avoid drifting into all-small/high-gamma region.
+        right <- mid
       }
     }
     
