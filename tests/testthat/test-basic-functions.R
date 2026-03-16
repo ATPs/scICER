@@ -344,7 +344,70 @@ test_that("optimize_clustering keeps raw labels and applies final-only merge", {
   expect_true(all(table(result$best_labels) >= 2L))
 })
 
-test_that("optimize_clustering admits gamma with any-hit plus median-window and computes IC from all trials", {
+test_that("optimize_clustering prefers strict admission when strict and relaxed both exist", {
+  ig <- igraph::make_ring(4)
+  label_count1 <- c(0L, 0L, 0L, 0L) # effective clusters (min=1): 1
+  label_count2 <- c(0L, 0L, 1L, 1L) # effective clusters (min=1): 2
+  label_count3 <- c(0L, 1L, 2L, 2L) # effective clusters (min=1): 3
+  state <- new.env(parent = emptyenv())
+  state$last_res_key <- NULL
+  state$trial_idx <- 0L
+
+  local_mocked_bindings(
+    leiden_clustering = function(igraph_obj, resolution, objective_function,
+                                 n_iterations, beta, initial_membership = NULL) {
+      res_key <- sprintf("%.6f", resolution)
+      if (is.null(state$last_res_key) || !identical(state$last_res_key, res_key)) {
+        state$last_res_key <- res_key
+        state$trial_idx <- 1L
+      } else {
+        state$trial_idx <- state$trial_idx + 1L
+      }
+
+      if (resolution < 0.15) {
+        # strict-valid only for target=2: counts {1, 3} -> median_raw=2, median_int=2, no hit
+        if (state$trial_idx == 1L) label_count1 else label_count3
+      } else if (resolution < 0.25) {
+        # relaxed-valid only: counts {2, 1} -> median_raw=1.5, median_int=1, has hit
+        if (state$trial_idx == 1L) label_count2 else label_count1
+      } else {
+        # neither strict nor relaxed
+        label_count1
+      }
+    },
+    .package = "scICER"
+  )
+
+  result <- scICER:::optimize_clustering(
+    igraph_obj = ig,
+    target_clusters = 2L,
+    gamma_range = c(0.1, 0.3),
+    objective_function = "modularity",
+    n_trials = 2L,
+    n_bootstrap = 2L,
+    seed = 123,
+    beta = 0.1,
+    n_iterations = 1L,
+    max_iterations = 3L,
+    resolution_tolerance = 1e-3,
+    n_workers = 1L,
+    min_cluster_size = 1L,
+    verbose = FALSE,
+    worker_id = "TEST",
+    in_parallel_context = FALSE
+  )
+
+  # strict-first should select strict-only gammas and ignore relaxed-only candidates.
+  expect_false(is.null(result))
+  expected_arr <- sort(c(
+    paste(label_count1, collapse = ","),
+    paste(label_count3, collapse = ",")
+  ))
+  observed_arr <- sort(vapply(result$labels$arr, paste, collapse = ",", character(1)))
+  expect_equal(observed_arr, expected_arr)
+})
+
+test_that("optimize_clustering falls back to relaxed admission and computes IC from all trials", {
   ig <- igraph::make_ring(4)
   hit_labels <- c(0L, 0L, 1L, 1L)   # effective clusters (min=2): 2
   miss_labels <- c(0L, 1L, 2L, 3L)  # effective clusters (min=2): 0
@@ -381,8 +444,7 @@ test_that("optimize_clustering admits gamma with any-hit plus median-window and 
     in_parallel_context = FALSE
   )
 
-  # Median effective count per gamma is 1 (from {2, 0}); this satisfies
-  # |median-target| <= 1 and has a hit, so gamma is admitted.
+  # Counts per gamma are {2, 0}: strict fails (median_int=1), relaxed passes.
   expect_false(is.null(result))
   expect_equal(length(result$labels$arr), 2L)
   expected_arr <- sort(c(
@@ -393,7 +455,55 @@ test_that("optimize_clustering admits gamma with any-hit plus median-window and 
   expect_equal(observed_arr, expected_arr)
 })
 
-test_that("optimize_clustering rejects gamma when median-window fails even with a hit trial", {
+test_that("optimize_clustering accepts strict-only gamma even when no trial hits target", {
+  ig <- igraph::make_ring(4)
+  label_count1 <- c(0L, 0L, 0L, 0L) # effective clusters (min=1): 1
+  label_count3 <- c(0L, 1L, 2L, 2L) # effective clusters (min=1): 3
+  state <- new.env(parent = emptyenv())
+  state$trial_idx <- 0L
+
+  local_mocked_bindings(
+    leiden_clustering = function(igraph_obj, resolution, objective_function,
+                                 n_iterations, beta, initial_membership = NULL) {
+      state$trial_idx <- state$trial_idx + 1L
+      if ((state$trial_idx %% 2L) == 1L) {
+        return(label_count1)
+      }
+      label_count3
+    },
+    .package = "scICER"
+  )
+
+  result <- scICER:::optimize_clustering(
+    igraph_obj = ig,
+    target_clusters = 2L,
+    gamma_range = c(0.1, 0.1),
+    objective_function = "modularity",
+    n_trials = 2L,
+    n_bootstrap = 2L,
+    seed = 123,
+    beta = 0.1,
+    n_iterations = 1L,
+    max_iterations = 3L,
+    resolution_tolerance = 1e-3,
+    n_workers = 1L,
+    min_cluster_size = 1L,
+    verbose = FALSE,
+    worker_id = "TEST",
+    in_parallel_context = FALSE
+  )
+
+  # Counts are {1, 3}: strict passes (median_int=2), relaxed fails (no hit).
+  expect_false(is.null(result))
+  expected_arr <- sort(c(
+    paste(label_count1, collapse = ","),
+    paste(label_count3, collapse = ",")
+  ))
+  observed_arr <- sort(vapply(result$labels$arr, paste, collapse = ",", character(1)))
+  expect_equal(observed_arr, expected_arr)
+})
+
+test_that("optimize_clustering returns NULL when strict and relaxed admissions both fail", {
   ig <- igraph::make_ring(4)
   hit_labels <- c(0L, 0L, 1L, 1L)   # effective clusters (min=2): 2
   miss_labels <- c(0L, 1L, 2L, 3L)  # effective clusters (min=2): 0
@@ -430,7 +540,7 @@ test_that("optimize_clustering rejects gamma when median-window fails even with 
     in_parallel_context = FALSE
   )
 
-  # Effective counts are {2, 0, 0}: has hit, but median is 0 so |0-2|=2 > 1.
+  # Effective counts are {2, 0, 0}: strict fails (median_int=0), relaxed fails (gap>1).
   expect_null(result)
 })
 

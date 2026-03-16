@@ -23,7 +23,7 @@ This description matches the code on `main` after the parallel scheduling update
 4. Optionally filter unstable `k` values.
 5. For each remaining `k`, run intensive optimization:
    - evaluate many gamma values,
-   - keep gammas only if both hold: at least one trial hits target `k` (effective count) and `abs(median(effective_counts) - k) <= 1`,
+   - apply strict-first admission: prefer `as.integer(median(effective_counts)) == k`; if none match, fallback to `hit_count >= 1 && abs(median(effective_counts) - k) <= 1`,
    - compute IC using all trials for each admitted gamma,
    - compute IC/MEI stability metrics,
    - select `best_labels`.
@@ -344,23 +344,26 @@ This is the most expensive part.
 - build 11-step gamma sequence (5-step in narrow large-graph case),
 - for each gamma:
   - run `n_trials` Leiden calls (`run_leiden_trial()` -> `leiden_clustering()`),
-  - compute median effective cluster count across trials,
+  - compute median effective cluster count across trials (`median_raw`) and compatibility median (`median_int = as.integer(median_raw)`),
   - identify hit trials where effective count equals target `k`,
-  - if no hit trial exists, mark invalid and skip IC,
-  - if hit exists but `abs(median(effective_counts) - k) > 1`, also mark invalid and skip IC,
-  - if both checks pass, compute IC from all trials and keep the full trial matrix reference.
+  - compute two admission flags:
+    - strict: `median_int == k`,
+    - relaxed: `hit_count >= 1 && abs(median_raw - k) <= 1`,
+  - if neither strict nor relaxed passes, mark invalid and skip IC,
+  - if either passes, compute IC from all trials and keep the full trial matrix reference.
 
 Critical point:
 
-- Gamma admission uses a **dual rule**:
-  - `hit_count >= 1` (any-hit, including single-hit cases), and
-  - `abs(median(effective_counts) - target_k) <= 1`.
-- If no gamma satisfies both conditions, optimization returns `NULL` for that `k`.
+- Gamma admission uses a **strict-first + fallback rule**:
+  - strict pool: `as.integer(median(effective_counts)) == target_k`,
+  - fallback relaxed pool (only if strict pool empty): `hit_count >= 1 && abs(median(effective_counts) - target_k) <= 1`.
+- If both pools are empty, optimization returns `NULL` for that `k`.
 
 #### 5.6.2 Phase 2: target-count filtering
 
 - summarize how many gamma values produced each effective count,
-- keep only gammas admitted by the dual rule above.
+- if strict pool is non-empty, keep strict pool only;
+- otherwise keep relaxed pool.
 
 #### 5.6.3 Phase 3: best gamma selection
 
@@ -498,7 +501,7 @@ Common patterns:
 Symptoms in logs:
 
 - many lines like `median effective clusters = 0` with very high raw clusters,
-- final errors about no gamma satisfying hit + median-window admission for effective cluster count `X`,
+- final errors about no gamma satisfying strict admission and none satisfying relaxed fallback admission for effective cluster count `X`,
 - final result vectors length `0`.
 
 ## 9. Relationship to Seurat Resolution/Gamma
