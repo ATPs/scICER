@@ -12,7 +12,16 @@ It covers:
 - runtime, parallelism, memory, and failure modes.
 
 This description matches the code on `main` after the raw-cluster-aware
-resolution search and gamma-admission updates on 2026-03-17.
+resolution search and gamma-admission updates on 2026-03-17, plus the
+`plot_ic()` gamma-label placement update on 2026-03-17.
+
+## 1.1 Visualization Note
+
+- `plot_ic(..., show_gamma = TRUE)` now renders gamma values directly under each
+  x-axis cluster label as a two-line tick label and rotates the x-axis text by
+  45 degrees.
+- The plot subtitle remains focused on threshold and exclusion context instead
+  of listing all selected gamma values inline.
 
 ## 2. Quick Mental Model
 

@@ -25,8 +25,8 @@ NULL
 #' @param figure_size Figure size as c(width, height) (default: c(10, 6))
 #' @param title Plot title (default: "Clustering Consistency Analysis")
 #' @param show_threshold Whether to show threshold line (default: TRUE)
-#' @param show_gamma Whether to append selected gamma values per target k in the
-#'   subtitle (default: TRUE)
+#' @param show_gamma Whether to add selected gamma values below each x-axis
+#'   cluster label with a 45 degree rotation (default: TRUE)
 #'
 #' @return ggplot object
 #' @export
@@ -121,6 +121,12 @@ plot_ic <- function(scice_results, threshold = 1.005, figure_size = c(10, 6),
     }
   }
   
+  cluster_levels <- as.character(sort(unique(plot_data$cluster_number)))
+  x_axis_labels <- stats::setNames(cluster_levels, cluster_levels)
+  x_axis_text <- ggplot2::element_text(size = 10)
+  x_axis_title_margin <- ggplot2::margin(t = 0)
+  bottom_plot_margin <- 5.5
+
   if (isTRUE(show_gamma)) {
     format_gamma <- function(x) {
       if (!is.finite(x)) {
@@ -128,21 +134,30 @@ plot_ic <- function(scice_results, threshold = 1.005, figure_size = c(10, 6),
       }
       sprintf("%.2e", x)
     }
+
+    gamma_values <- stats::setNames(
+      rep("NA", length(cluster_levels)),
+      cluster_levels
+    )
     gamma_indices <- valid_indices[!is.na(scice_results$gamma[valid_indices])]
+
     if (length(gamma_indices) > 0) {
-      gamma_summary <- paste(
-        paste0(
-          "k=",
-          scice_results$n_cluster[gamma_indices],
-          ": ",
-          vapply(scice_results$gamma[gamma_indices], format_gamma, character(1))
-        ),
-        collapse = "; "
-      )
-      subtitle_parts <- c(subtitle_parts, paste("Selected gamma:", gamma_summary))
-    } else {
-      subtitle_parts <- c(subtitle_parts, "Selected gamma: unavailable")
+      gamma_values[as.character(scice_results$n_cluster[gamma_indices])] <-
+        vapply(scice_results$gamma[gamma_indices], format_gamma, character(1))
     }
+
+    x_axis_labels <- stats::setNames(
+      paste0(cluster_levels, "\n", gamma_values[cluster_levels]),
+      cluster_levels
+    )
+    x_axis_text <- ggplot2::element_text(
+      size = 10,
+      angle = 45,
+      hjust = 1,
+      vjust = 1
+    )
+    x_axis_title_margin <- ggplot2::margin(t = 12)
+    bottom_plot_margin <- 18
   }
   subtitle_text <- paste(subtitle_parts, collapse = "\n")
 
@@ -158,7 +173,10 @@ plot_ic <- function(scice_results, threshold = 1.005, figure_size = c(10, 6),
                 "FALSE" = paste("Inconsistent (IC >=", threshold, ")"))
     ) +
     ggplot2::geom_jitter(width = 0.2, alpha = 0.4, size = 0.8, height = 0) +
-    ggplot2::scale_x_discrete(name = "Number of Clusters") +
+    ggplot2::scale_x_discrete(
+      name = "Number of Clusters",
+      labels = x_axis_labels
+    ) +
     ggplot2::scale_y_continuous(name = "Inconsistency (IC) Score",
                       limits = c(0.99, max(plot_data$ic_score) * 1.05)) +
     ggplot2::labs(title = title,
@@ -168,9 +186,12 @@ plot_ic <- function(scice_results, threshold = 1.005, figure_size = c(10, 6),
       plot.title = ggplot2::element_text(size = 14, face = "bold"),
       plot.subtitle = ggplot2::element_text(size = 12),
       axis.title = ggplot2::element_text(size = 12),
+      axis.title.x = ggplot2::element_text(size = 12, margin = x_axis_title_margin),
       axis.text = ggplot2::element_text(size = 10),
+      axis.text.x = x_axis_text,
       panel.grid.minor = ggplot2::element_blank(),
-      legend.position = "bottom"
+      legend.position = "bottom",
+      plot.margin = ggplot2::margin(5.5, 5.5, bottom_plot_margin, 5.5)
     )
 
   # Add threshold line if requested

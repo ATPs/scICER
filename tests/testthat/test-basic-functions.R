@@ -849,7 +849,7 @@ test_that("optimize_clustering returns NULL when strict and relaxed admissions b
   expect_null(result)
 })
 
-test_that("plot_ic show_gamma controls selected-gamma subtitle", {
+test_that("plot_ic show_gamma moves gamma labels onto rotated x-axis ticks", {
   scice_results <- list(
     gamma = c(0.5, 0.8),
     labels = list(NULL, NULL),
@@ -866,11 +866,16 @@ test_that("plot_ic show_gamma controls selected-gamma subtitle", {
   class(scice_results) <- "scICE"
 
   plot_with_gamma <- plot_ic(scice_results, show_gamma = TRUE)
-  expect_true(grepl("Selected gamma:", plot_with_gamma$labels$subtitle, fixed = TRUE))
-  expect_true(grepl("k=2:", plot_with_gamma$labels$subtitle, fixed = TRUE))
+  x_scale_with_gamma <- plot_with_gamma$scales$get_scales("x")
+  expect_identical(x_scale_with_gamma$labels[["2"]], "2\n5.00e-01")
+  expect_identical(x_scale_with_gamma$labels[["3"]], "3\n8.00e-01")
+  expect_identical(plot_with_gamma$theme$axis.text.x$angle, 45)
 
   plot_without_gamma <- plot_ic(scice_results, show_gamma = FALSE)
-  expect_false(grepl("Selected gamma:", plot_without_gamma$labels$subtitle, fixed = TRUE))
+  x_scale_without_gamma <- plot_without_gamma$scales$get_scales("x")
+  expect_identical(x_scale_without_gamma$labels[["2"]], "2")
+  expect_identical(x_scale_without_gamma$labels[["3"]], "3")
+  expect_null(plot_without_gamma$theme$axis.text.x$angle)
 })
 
 test_that("find_resolution_ranges reuses one representative preliminary clustering per gamma step", {

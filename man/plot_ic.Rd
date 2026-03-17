@@ -24,8 +24,8 @@ plot_ic(
 
 \item{show_threshold}{Whether to show threshold line (default: TRUE)}
 
-\item{show_gamma}{Whether to append selected gamma values per target k in the
-subtitle (default: TRUE)}
+\item{show_gamma}{Whether to add selected gamma values below each x-axis
+cluster label with a 45 degree rotation (default: TRUE)}
 }
 \value{
 ggplot object
