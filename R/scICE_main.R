@@ -196,7 +196,7 @@ scICE_clustering <- function(object,
     scice_message(paste(rep("-", 80), collapse = ""))
   }
   
-  # Parallel setup (mclapply backend in clustering_core.R)
+  # Parallel setup (mclapply backend in clustering_runtime.R)
   if (verbose) {
     scice_message("PARALLEL PROCESSING SETUP:")
     scice_message(paste("  Detected cores:", detected_cores))
