@@ -11,7 +11,8 @@ It covers:
 - the internal function call chain and behavior of each major helper,
 - runtime, parallelism, memory, and failure modes.
 
-This description matches the code on `main` after the parallel scheduling update on 2026-03-13.
+This description matches the code on `main` after the raw-cluster-aware
+resolution search and gamma-admission updates on 2026-03-17.
 
 ## 2. Quick Mental Model
 
@@ -19,12 +20,18 @@ This description matches the code on `main` after the parallel scheduling update
 
 1. Validate inputs and initialize runtime context.
 2. Extract a Seurat graph and convert it to `igraph`.
-3. For each target cluster number `k`, search a gamma (resolution) range likely to produce that `k`.
+3. For each target cluster number `k`, run a raw-cluster-aware binary search to
+   find a coarse gamma range, then optionally clamp that range to a raw-cluster
+   plateau/bracket near the target.
 4. Optionally filter unstable `k` values.
 5. For each remaining `k`, run intensive optimization:
    - evaluate many gamma values,
-   - apply strict-first admission: prefer `as.integer(median(effective_counts)) == k`; if none match, fallback to `hit_count >= 1 && abs(median(effective_counts) - k) <= 1`,
-   - compute IC using all trials for each admitted gamma,
+   - collect both effective-cluster and raw-cluster medians across trials,
+   - compute IC using all trials for any gamma admitted by the effective/raw
+     candidate rules,
+   - choose one candidate family via the ordered admission ladder:
+     `raw_strict_soft -> strict_soft -> relaxed_soft -> strict_hard -> relaxed_hard -> relaxed_unguarded -> raw_relaxed_soft -> raw_relaxed_hard -> raw_relaxed_unguarded`,
+   - refine multi-gamma candidate sets by minimum raw-cluster median gap to `k`,
    - compute IC/MEI stability metrics,
    - select `best_labels`.
 6. Return an `scICE` object and annotate which `k` values are consistent under `ic_threshold`.
@@ -32,7 +39,13 @@ This description matches the code on `main` after the parallel scheduling update
 Important: current implementation uses **effective cluster counting** when `min_cluster_size > 1`.
 
 - Effective cluster count = number of clusters with size `>= min_cluster_size`.
+- Raw cluster count = number of unique cluster labels before any final merge.
 - If all clusters are smaller than threshold, effective count is `0`.
+- Resolution search now reuses **one representative preliminary clustering per
+  gamma step** and summarizes nominal median effective/raw counts from that
+  single run.
+- Raw cluster medians are used as guardrails during resolution search and as a
+  bounded fallback family during gamma admission.
 - Final small-cluster merge is applied **once** and only to `best_labels`.
 
 ## 3. Public API: Parameter-by-Parameter
@@ -183,13 +196,20 @@ scICE_clustering(
 - Meaning: minimum cells for a cluster to count as effective.
 - Default: `2`.
 - Current semantics:
-  - search/optimization target matching uses effective count only,
+  - effective count still drives the main target-matching objective,
+  - resolution search and optimization also inspect raw cluster medians to
+    reject pathological over-fragmented matches,
+  - resolution search additionally clamps coarse gamma bounds to a raw-cluster
+    plateau/bracket/near-target region when `min_cluster_size > 1`,
+  - optimization can fall back to bounded raw-count families when effective
+    admission families are empty,
   - IC/MEI are computed on raw (unmerged) trial labels,
   - only final `best_labels` gets one deterministic merge pass.
 - Edge rule: all-small trial => effective count `0`.
 - Consequence:
   - increasing this value can make target `k` harder to hit,
-  - can change “has output vs no output” even when raw clusters look reasonable.
+  - can change “has output vs no output” even when raw clusters look
+    reasonable, because raw-count guards/fallbacks are also activated.
 
 ### 3.15 `resolution_tolerance`
 
@@ -197,7 +217,8 @@ scICE_clustering(
 - Used in:
   - CPM lower search bound (`log(resolution_tolerance)`),
   - stopping condition for bound search loops,
-  - narrow-range gamma sequence behavior.
+  - narrow-range gamma sequence behavior,
+  - plateau-clamp probe grid generation.
 - Consequence:
   - smaller tolerance can increase search iterations,
   - too large may produce coarse bounds.
@@ -220,6 +241,11 @@ Returned list fields (main ones):
 - `ic_vec`: bootstrap IC vectors.
 - `n_cluster`: cluster numbers represented in returned entries.
 - `best_labels`: final labels (with one final merge if `min_cluster_size > 1`).
+- `effective_cluster_median`: median effective cluster count at the selected gamma.
+- `raw_cluster_median`: median raw cluster count at the selected gamma.
+- `admission_mode`: winning Phase-2 admission family for the selected gamma.
+- `best_labels_raw_cluster_count`: raw cluster count of the selected best trial
+  before the final merge.
 - `n_iter`: final iteration count per `k`.
 - `mei`: MEI scores.
 - `k`: alias/metadata for iteration count.
@@ -269,11 +295,18 @@ Stages:
    - worker layout is computed as outer `k` workers + per-`k` nested budget,
    - outer `k` tasks run with dynamic queue scheduling to reduce stragglers,
 6. compute MEI for successful branches,
-7. merge successful and excluded entries and return compatibility list.
+7. merge successful and excluded entries and return compatibility list,
+8. emit per-`k` selection diagnostics:
+   - selected gamma,
+   - selected effective/raw medians,
+   - winning admission family,
+   - raw cluster count before final merge.
 
 ### 5.4 Resolution Search: `find_resolution_ranges()`
 
-Goal: find `[left_bound, right_bound]` gamma range for each target `k`.
+Goal: find `[left_bound, right_bound]` gamma range for each target `k` while
+avoiding high-gamma regimes where raw clusters explode but effective clusters
+collapse after `min_cluster_size` filtering.
 
 #### 5.4.1 Preliminary settings
 
@@ -286,42 +319,81 @@ Based on graph size (`vcount`):
 #### 5.4.2 Trial execution helper chain
 
 - `run_preliminary_trials()`
-  - runs up to `n_preliminary_trials` per gamma,
-  - supports adaptive trial launch mode:
-    - serial mode when per-target worker capacity is small,
-    - parallel mode only when capacity crosses an internal threshold,
-  - emits heartbeat with running trials.
+  - now runs **one representative** preliminary Leiden call per gamma step via
+    `run_single_trial_count(..., use_cache = TRUE)`,
+  - then fills nominal vectors of length `n_preliminary_trials` with that single
+    result so downstream median-based logic stays unchanged,
+  - still computes/logs worker mode and capacity, but no longer launches a full
+    preliminary burst per gamma step.
 - Each trial uses `run_single_trial_count()`:
   - calls `cached_leiden_clustering()`,
   - computes:
     - `effective_count = count_effective_clusters(labels, min_cluster_size)`,
     - `raw_count = length(unique(labels))`.
 
-#### 5.4.3 Lower-bound search logic
+Important implication:
 
-At each mid gamma:
+- Actual preliminary Leiden call count is now approximately the number of gamma
+  steps evaluated, not `gamma steps * n_preliminary_trials`.
+- The logged “trials per step” remains the nominal setting (`3`, `5`, or `15`).
 
-- if `effective >= target`: move `right = mid`,
-- else if `raw < target`: move `left = mid`,
-- else (over-fragmented: raw high but effective low): move `right = mid`.
+#### 5.4.3 Search-state classification
+
+At each gamma probe, `classify_resolution_search_state()` evaluates:
+
+- median raw cluster count,
+- median effective cluster count,
+- whether raw count is below target, in an acceptable search band, or above it,
+- whether the step is over-fragmented (`raw` not below target but `effective < target`).
+
+The search-band ceiling is defined by `raw_cluster_search_upper(target)`:
+
+- `target + 1` when `target <= 10`,
+- otherwise `max(target + 2, ceiling(target * 1.05))`.
+
+This is stricter than the later optimization guards and is used only to steer
+the binary search away from obviously over-fragmented regions.
+
+#### 5.4.4 Lower-bound and upper-bound search logic
+
+Lower-bound search action:
+
+- if raw median is below target, increase gamma,
+- otherwise decrease gamma.
+
+Upper-bound search action:
+
+- if raw median is below target, increase gamma,
+- if raw median is in-band and effective median meets target, increase gamma,
+- otherwise decrease gamma.
 
 Interpretation:
 
-- last branch tries to avoid drifting into high-gamma all-small regimes.
+- raw-below means gamma is too small,
+- raw-in-band plus effective-at-target supports widening upward,
+- over-fragmented or raw-above-band states push the search downward so the
+  range does not drift into all-small-cluster regimes.
 
-#### 5.4.4 Upper-bound search logic
+#### 5.4.5 Plateau clamp and post-processing
 
-At each mid gamma:
+After coarse lower/upper bounds are found:
 
-- if `effective >= target`: move `left = mid`,
-- else if `raw < target`: move `left = mid`,
-- else (over-fragmented): move `right = mid`.
+- if `min_cluster_size > 1`, build a probe gamma grid across the coarse range
+  using the same helper as optimization (`build_gamma_sequence_for_range()`),
+- evaluate representative raw medians on that grid,
+- stabilize the raw-median curve with `cummax()` to suppress non-monotone noise,
+- clamp the final range by priority:
+  - exact raw plateau (`raw_exact`),
+  - nearest raw crossing/bracket (`raw_bracket`),
+  - near-target raw region with `abs(raw_median - target) <= 1` (`raw_near_target`),
+  - otherwise keep the coarse range (`coarse`).
 
-#### 5.4.5 Post-processing
+Additional details:
 
-- produce cluster-specific ranges,
-- adjust near-overlapping adjacent ranges,
-- return named list `{k -> c(left, right)}`.
+- CPM degenerate bounds are widened on the **gamma scale** before being mapped
+  back to log space.
+- Adjacent cluster ranges are still nudged apart when they nearly overlap.
+- Final return value is a named list `{k -> c(left, right)}` on the actual gamma scale.
 
 ### 5.5 Optional Filtering Stage (inside `clustering_main()`)
 
@@ -341,34 +413,69 @@ This is the most expensive part.
 
 #### 5.6.1 Phase 1: evaluate gamma sequence
 
-- build 11-step gamma sequence (5-step in narrow large-graph case),
+- build gamma sequence with the shared helper `build_gamma_sequence_for_range()`
+  (typically 11 steps, or 5 for narrow large-graph cases),
 - for each gamma:
   - run `n_trials` Leiden calls (`run_leiden_trial()` -> `leiden_clustering()`),
-  - compute median effective cluster count across trials (`median_raw`) and compatibility median (`median_int = as.integer(median_raw)`),
-  - identify hit trials where effective count equals target `k`,
-  - compute two admission flags:
-    - strict: `median_int == k`,
-    - relaxed: `hit_count >= 1 && abs(median_raw - k) <= 1`,
-  - if neither strict nor relaxed passes, mark invalid and skip IC,
-  - if either passes, compute IC from all trials and keep the full trial matrix reference.
+  - compute:
+    - `median_effective_clusters`,
+    - `median_clusters_int = as.integer(median_effective_clusters)`,
+    - `raw_cluster_median`,
+    - `raw_cluster_median_int = as.integer(raw_cluster_median)`,
+    - effective hit count (`effective_count == k`),
+    - raw hit count (`raw_count == k`),
+    - effective/raw median gaps to target,
+    - soft/hard raw-cluster guard flags.
 
-Critical point:
+Admission flags:
 
-- Gamma admission uses a **strict-first + fallback rule**:
-  - strict pool: `as.integer(median(effective_counts)) == target_k`,
-  - fallback relaxed pool (only if strict pool empty): `hit_count >= 1 && abs(median(effective_counts) - target_k) <= 1`.
-- If both pools are empty, optimization returns `NULL` for that `k`.
+- effective strict: `as.integer(median_effective_clusters) == k`,
+- effective relaxed: `effective_hit_count >= 1 && abs(median_effective_clusters - k) <= 1`,
+- raw strict: `as.integer(raw_cluster_median) == k`,
+- raw relaxed: `raw_hit_count >= 1 && abs(raw_cluster_median - k) <= 1`.
+
+Phase-1 IC rule:
+
+- if **none** of the four admission flags pass, mark the gamma invalid and skip IC,
+- otherwise compute IC from **all trials** at that gamma and keep the full trial matrix.
 
 #### 5.6.2 Phase 2: target-count filtering
 
-- summarize how many gamma values produced each effective count,
-- if strict pool is non-empty, keep strict pool only;
-- otherwise keep relaxed pool.
+- summarize effective-count and raw-count diagnostics across the gamma grid,
+- choose the first non-empty candidate family from this ordered ladder:
+  1. `raw_strict_soft`
+  2. `strict_soft`
+  3. `relaxed_soft`
+  4. `strict_hard`
+  5. `relaxed_hard`
+  6. `relaxed_unguarded`
+  7. `raw_relaxed_soft`
+  8. `raw_relaxed_hard`
+  9. `raw_relaxed_unguarded`
+
+Where:
+
+- `soft` and `hard` refer to raw-cluster ceilings from `raw_cluster_guard_limits(target)`:
+  - soft = `max(target + 3, ceiling(target * 1.1))`
+  - hard = `max(target + 5, ceiling(target * 1.5))`
+- `raw_strict_*` intentionally outranks effective families when there is an
+  exact bounded raw-count plateau.
+
+Tie refinement:
+
+- if the winning family contains multiple gammas and `min_cluster_size > 1`,
+  keep only the gammas with the smallest raw-median gap to the target.
+
+If all families are empty, optimization returns `NULL`.
 
 #### 5.6.3 Phase 3: best gamma selection
 
 - choose first perfect IC (`==1`) if present,
-- else choose minimum IC.
+- else choose minimum IC,
+- retain diagnostics for the selected gamma:
+  - `effective_cluster_median`,
+  - `raw_cluster_median`,
+  - `admission_mode`.
 
 #### 5.6.4 Phase 4: iterative refinement (optional)
 
@@ -388,12 +495,21 @@ Triggered when best IC is not perfect and multiple gammas remain:
 #### 5.6.6 Final label extraction and merge
 
 - extract raw representative labels via `extract_clustering_array()` + `get_best_clustering()`,
-- apply one final merge pass: `merge_small_clusters_to_neighbors()`.
+- record `best_labels_raw_cluster_count`,
+- apply one final merge pass: `merge_small_clusters_to_neighbors()`,
+- log final selected diagnostics including:
+  - selected gamma,
+  - selected effective/raw medians,
+  - winning admission family,
+  - raw and final cluster counts for `best_labels`.
 
 Returned fields include:
 
 - raw labels array (`labels`),
 - final merged `best_labels`,
+- selected effective/raw medians,
+- admission family metadata,
+- raw cluster count before final merge,
 - IC statistics and iteration metadata.
 
 ## 6. Internal Helpers and Their Roles
@@ -415,7 +531,28 @@ Returned fields include:
 - counts clusters with size `>= min_cluster_size`.
 - all-small scenario returns `0`.
 
-### 6.4 `merge_small_clusters_to_neighbors()`
+### 6.4 Raw-count guard and search helpers
+
+- `raw_cluster_guard_limits()`:
+  - defines optimization-stage raw-cluster ceilings:
+    - soft = `max(target + 3, ceiling(target * 1.1))`,
+    - hard = `max(target + 5, ceiling(target * 1.5))`.
+- `raw_cluster_search_upper()`:
+  - defines the stricter resolution-search raw-count ceiling.
+- `build_gamma_sequence_for_range()`:
+  - centralizes gamma-grid generation for both optimization and plateau clamp.
+- `classify_resolution_search_state()`:
+  - converts raw/effective medians into lower/upper search actions.
+- `stabilize_probe_raw_medians()`:
+  - applies `cummax()` to raw-median probe curves before plateau clamp.
+- `clamp_gamma_range_to_raw_plateau()`:
+  - shrinks coarse ranges to exact raw plateaus, brackets, or near-target raw regions.
+- `select_gamma_admission()`:
+  - implements the ordered candidate-family ladder used in optimization Phase 2.
+- `refine_gamma_candidates_by_raw_gap()`:
+  - breaks ties by keeping gammas with the minimum raw-median gap to target.
+
+### 6.5 `merge_small_clusters_to_neighbors()`
 
 One-pass deterministic merge logic:
 
@@ -428,13 +565,13 @@ One-pass deterministic merge logic:
    - tie-break by smallest target ID.
 4. relabel to contiguous 0-based IDs.
 
-### 6.5 ECS/IC/MEI stack
+### 6.6 ECS/IC/MEI stack
 
 - `calculate_ecs()` uses ClustAssess element-level similarity,
 - `calculate_ic_from_extracted()` computes probability-weighted pairwise similarity aggregate,
 - `calculate_mei_from_array()` computes per-cell stability from pairwise ECS.
 
-### 6.6 Parallel and runtime utilities
+### 6.7 Parallel and runtime utilities
 
 - `cross_platform_mclapply()`:
   - `mclapply` on Unix and `lapply` on Windows,
@@ -452,16 +589,17 @@ Optimization-stage worker allocation details:
 
 - starts from memory-capped optimization worker budget,
 - computes active outer `k` workers,
-- reserves minimum nested workers per `k` for heavy settings (based on `n_trials`/`n_bootstrap`),
-- recomputes per-cluster budget and enforces `outer_workers * per_cluster_budget <= total_budget`,
+- passes the full optimization budget into each outer worker,
+- each optimizer then derives its nested gamma/bootstrap workers from that
+  budget and its current gamma-grid size,
 - runs outer `k` loop with dynamic queue (`mc.preschedule = FALSE`).
 
 Resolution-search preliminary trial allocation details:
 
 - computes per-target worker capacity from global search budget and active outer `k` workers,
-- uses serial preliminary trials by default for low per-target capacity,
-- enables parallel preliminary trials only when capacity reaches the internal minimum threshold,
-- caps parallel preliminary workers by an internal upper bound to limit `mcparallel/mccollect` overhead.
+- still logs serial/parallel preliminary mode based on worker capacity,
+- but actual preliminary evaluation now reuses one representative cached Leiden
+  result per gamma step rather than launching a full per-step trial burst.
 
 ## 7. Runtime and Scaling Characteristics
 
@@ -478,8 +616,12 @@ Resolution-search preliminary trial allocation details:
 Per target `k` (worst-case rough upper bound):
 
 - Resolution search:
-  - up to `(lower + upper iterations) * n_preliminary_trials`
-  - on large graphs: `60 * 3 = 180` preliminary Leiden runs.
+  - coarse lower + upper binary search now costs about one representative Leiden
+    call per search step, not `search steps * n_preliminary_trials`,
+  - large graphs: up to about `30 + 30 = 60` representative preliminary runs,
+  - smaller graphs: up to about `50 + 50 = 100` representative preliminary runs,
+  - if `min_cluster_size > 1`, plateau clamp adds another probe pass:
+    typically 11 representative runs (or 5 for narrow large-graph cases).
 - Optimization Phase 1:
   - `n_steps * n_trials` (typically `11 * n_trials`).
 - Phase 4:
@@ -493,15 +635,17 @@ The pipeline can return no valid cluster solutions even without exceptions.
 
 Common patterns:
 
-1. No gamma has any trial hitting target effective count in Phase 2.
-2. All targets are excluded by filtering (`remove_threshold` finite).
-3. Effective-count semantics with higher `min_cluster_size` makes target hard to hit.
-4. Strong stochastic/non-monotonic behavior near gamma boundaries.
+1. No gamma survives the Phase-2 admission ladder after raw guards and tie refinement.
+2. Raw cluster counts reach over-fragmented regimes, so the search/optimizer avoids them even if a few effective hits appear.
+3. All targets are excluded by filtering (`remove_threshold` finite).
+4. Effective-count semantics with higher `min_cluster_size` makes target hard to hit.
+5. Strong stochastic/non-monotonic behavior near gamma boundaries.
 
 Symptoms in logs:
 
-- many lines like `median effective clusters = 0` with very high raw clusters,
-- final errors about no gamma satisfying strict admission and none satisfying relaxed fallback admission for effective cluster count `X`,
+- many lines with `over_fragmented = TRUE` or very large `median_raw`,
+- plateau clamp modes such as `coarse` when no clean raw plateau/bracket is found,
+- final errors about no gamma satisfying raw-guarded strict/relaxed admission or bounded raw-count fallback admission for effective cluster count `X`,
 - final result vectors length `0`.
 
 ## 9. Relationship to Seurat Resolution/Gamma
@@ -552,15 +696,21 @@ scICE_clustering
                       -> cached_leiden_clustering
                            -> leiden_clustering
                       -> count_effective_clusters
+            -> classify_resolution_search_state
+            -> build_gamma_sequence_for_range
+            -> clamp_gamma_range_to_raw_plateau
        -> (optional) filtering stage
        -> optimize_clustering (per k)
             -> evaluate_gamma
                  -> run_leiden_trial
                       -> leiden_clustering
                  -> count_effective_clusters
+                 -> passes_raw_cluster_guard
                  -> extract_clustering_array
                  -> calculate_ic_from_extracted
                       -> calculate_ecs
+            -> select_gamma_admission
+            -> refine_gamma_candidates_by_raw_gap
             -> iterative refinement (optional)
             -> bootstrap IC
             -> get_best_clustering
