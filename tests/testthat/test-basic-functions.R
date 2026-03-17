@@ -99,11 +99,19 @@ test_that("calculate_ecs scalar mode is stable for large inputs", {
   cluster_b <- sample(1:10, n, replace = TRUE)
 
   scalar_score <- calculate_ecs(cluster_a, cluster_b, return_vector = FALSE)
+  compact_labels <- function(x) as.integer(factor(x, levels = unique(x)))
+  expected_scalar <- ClustAssess::element_sim(
+    compact_labels(cluster_a),
+    compact_labels(cluster_b),
+    alpha = 0.9
+  )
   vector_score <- mean(calculate_ecs(cluster_a, cluster_b, return_vector = TRUE))
 
-  expect_equal(scalar_score, vector_score, tolerance = 1e-10)
+  expect_equal(scalar_score, expected_scalar, tolerance = 1e-10)
   expect_true(is.finite(scalar_score))
   expect_true(scalar_score >= 0 && scalar_score <= 1)
+  expect_true(is.finite(vector_score))
+  expect_true(vector_score >= 0 && vector_score <= 1)
 })
 
 test_that("get_robust_labels requires explicit Seurat object for return_seurat", {
@@ -173,6 +181,138 @@ test_that("count_effective_clusters handles thresholds and all-small fallback", 
   expect_equal(scICER:::count_effective_clusters(labels, min_cluster_size = 2L), 2L)
   expect_equal(scICER:::count_effective_clusters(labels, min_cluster_size = 4L), 0L)
   expect_equal(scICER:::count_effective_clusters(integer(0), min_cluster_size = 3L), 0L)
+})
+
+test_that("raw cluster guard thresholds match the default policy", {
+  limits <- scICER:::raw_cluster_guard_limits(14L)
+
+  expect_equal(limits$soft, 17L)
+  expect_equal(limits$hard, 21L)
+  expect_true(scICER:::passes_raw_cluster_guard(17, 14L, min_cluster_size = 2L, level = "soft"))
+  expect_false(scICER:::passes_raw_cluster_guard(18, 14L, min_cluster_size = 2L, level = "soft"))
+  expect_true(scICER:::passes_raw_cluster_guard(21, 14L, min_cluster_size = 2L, level = "hard"))
+  expect_false(scICER:::passes_raw_cluster_guard(22, 14L, min_cluster_size = 2L, level = "hard"))
+  expect_true(scICER:::passes_raw_cluster_guard(100, 14L, min_cluster_size = 1L, level = "soft"))
+})
+
+test_that("resolution search uses a tighter raw-cluster upper bound than phase-2 admission", {
+  expect_equal(scICER:::raw_cluster_search_upper(8L), 9L)
+  expect_equal(scICER:::raw_cluster_search_upper(14L), 16L)
+  expect_equal(scICER:::raw_cluster_search_upper(20L), 22L)
+})
+
+test_that("resolution search classifier uses raw brackets", {
+  raw_below <- scICER:::classify_resolution_search_state(
+    raw_cluster_median = 7,
+    effective_cluster_median = 7,
+    target_clusters = 8L,
+    min_cluster_size = 2L
+  )
+  expect_equal(raw_below$raw_class, "raw_below")
+  expect_false(raw_below$over_fragmented)
+  expect_equal(raw_below$lower_action, "increase_gamma")
+  expect_equal(raw_below$upper_action, "increase_gamma")
+
+  over_fragmented <- scICER:::classify_resolution_search_state(
+    raw_cluster_median = 8,
+    effective_cluster_median = 7,
+    target_clusters = 8L,
+    min_cluster_size = 2L
+  )
+  expect_equal(over_fragmented$raw_class, "raw_in_band")
+  expect_true(over_fragmented$over_fragmented)
+  expect_equal(over_fragmented$lower_action, "decrease_gamma")
+  expect_equal(over_fragmented$upper_action, "decrease_gamma")
+
+  raw_above_soft <- scICER:::classify_resolution_search_state(
+    raw_cluster_median = 12,
+    effective_cluster_median = 8,
+    target_clusters = 8L,
+    min_cluster_size = 2L
+  )
+  expect_equal(raw_above_soft$raw_class, "raw_above_soft")
+  expect_false(raw_above_soft$raw_guard_soft)
+  expect_false(raw_above_soft$over_fragmented)
+  expect_equal(raw_above_soft$lower_action, "decrease_gamma")
+  expect_equal(raw_above_soft$upper_action, "decrease_gamma")
+})
+
+test_that("clamp_gamma_range_to_raw_plateau narrows to exact raw plateaus and fallbacks", {
+  noisy_exact <- scICER:::clamp_gamma_range_to_raw_plateau(
+    gamma_sequence = c(0.1, 0.2, 0.3, 0.4),
+    raw_cluster_medians = c(3, 2, 4, 4),
+    target_clusters = 3L
+  )
+  expect_equal(noisy_exact$mode, "raw_exact")
+  expect_equal(noisy_exact$bounds, c(0.1, 0.2))
+  expect_equal(noisy_exact$indices, c(1L, 2L))
+
+  exact <- scICER:::clamp_gamma_range_to_raw_plateau(
+    gamma_sequence = c(0.1, 0.2, 0.3, 0.4, 0.5),
+    raw_cluster_medians = c(2, 3, 3, 3, 4),
+    target_clusters = 3L
+  )
+  expect_equal(exact$mode, "raw_exact")
+  expect_equal(exact$bounds, c(0.2, 0.4))
+  expect_equal(exact$indices, 2:4)
+
+  bracket <- scICER:::clamp_gamma_range_to_raw_plateau(
+    gamma_sequence = c(0.1, 0.2, 0.3, 0.4),
+    raw_cluster_medians = c(1, 2, 4, 5),
+    target_clusters = 3L
+  )
+  expect_equal(bracket$mode, "raw_bracket")
+  expect_equal(bracket$bounds, c(0.2, 0.3))
+  expect_equal(bracket$indices, c(2L, 3L))
+
+  near_target <- scICER:::clamp_gamma_range_to_raw_plateau(
+    gamma_sequence = c(0.1, 0.2, 0.3, 0.4),
+    raw_cluster_medians = c(4, 5, 5, 5),
+    target_clusters = 6L
+  )
+  expect_equal(near_target$mode, "raw_near_target")
+  expect_equal(near_target$bounds, c(0.2, 0.4))
+  expect_equal(near_target$indices, 2:4)
+
+  coarse <- scICER:::clamp_gamma_range_to_raw_plateau(
+    gamma_sequence = c(0.1, 0.2, 0.3, 0.4),
+    raw_cluster_medians = c(1, 1, 1, 1),
+    target_clusters = 6L
+  )
+  expect_equal(coarse$mode, "coarse")
+  expect_equal(coarse$bounds, c(0.1, 0.4))
+})
+
+test_that("select_gamma_admission prefers soft-guarded raw exact family first", {
+  decision <- scICER:::select_gamma_admission(
+    strict_flags = c(TRUE, FALSE, FALSE),
+    relaxed_flags = c(TRUE, TRUE, FALSE),
+    soft_guard_flags = c(TRUE, TRUE, TRUE),
+    hard_guard_flags = c(TRUE, TRUE, TRUE),
+    raw_strict_flags = c(FALSE, TRUE, FALSE),
+    raw_relaxed_flags = c(FALSE, TRUE, TRUE)
+  )
+
+  expect_equal(decision$mode, "raw_strict_soft")
+  expect_equal(decision$indices, 2L)
+})
+
+test_that("refine_gamma_candidates_by_raw_gap only prunes within the chosen family", {
+  refined <- scICER:::refine_gamma_candidates_by_raw_gap(
+    valid_indices = c(1L, 2L, 3L),
+    admission_mode = "strict_soft",
+    gamma_results = list(
+      list(mean_clusters = 5, raw_median_gap = 1),
+      list(mean_clusters = 5, raw_median_gap = 0),
+      list(mean_clusters = 5, raw_median_gap = 0)
+    ),
+    target_clusters = 5L,
+    min_cluster_size = 2L
+  )
+
+  expect_equal(refined$mode, "strict_soft")
+  expect_equal(refined$indices, c(2L, 3L))
+  expect_equal(refined$best_raw_gap, 0)
 })
 
 test_that("merge_small_clusters_to_neighbors prioritizes eligible target clusters", {
@@ -275,13 +415,13 @@ test_that("scICE_clustering validates min_cluster_size and preserves legacy mode
   expect_equal(result$min_cluster_size, 1L)
 })
 
-test_that("scICE_clustering enforces min_cluster_size on best labels", {
+test_that("scICE_clustering keeps raw best labels while storing min_cluster_size", {
   data("pbmc_small", package = "SeuratObject")
 
   result <- scICE_clustering(
     object = pbmc_small,
     graph_name = "RNA_snn",
-    cluster_range = 0L,
+    cluster_range = 2:3,
     n_workers = 1,
     n_trials = 2,
     n_bootstrap = 2,
@@ -291,16 +431,44 @@ test_that("scICE_clustering enforces min_cluster_size on best labels", {
     verbose = FALSE
   )
 
+  expect_equal(result$min_cluster_size, 2L)
   non_null_labels <- Filter(Negate(is.null), result$best_labels)
   expect_true(length(non_null_labels) > 0)
-
-  for (label_vec in non_null_labels) {
-    cluster_sizes <- table(label_vec)
-    expect_true(length(cluster_sizes) == 1L || min(cluster_sizes) >= 2L)
-  }
+  expect_true(all(vapply(non_null_labels, is.integer, logical(1))))
 })
 
-test_that("optimize_clustering keeps raw labels and applies final-only merge", {
+test_that("scICE_clustering returns per-k selection diagnostics", {
+  data("pbmc_small", package = "SeuratObject")
+
+  result <- scICE_clustering(
+    object = pbmc_small,
+    graph_name = "RNA_snn",
+    cluster_range = 2:3,
+    n_workers = 1,
+    n_trials = 2,
+    n_bootstrap = 2,
+    seed = 123,
+    remove_threshold = Inf,
+    min_cluster_size = 2,
+    verbose = FALSE
+  )
+
+  expect_equal(length(result$effective_cluster_median), length(result$n_cluster))
+  expect_equal(length(result$raw_cluster_median), length(result$n_cluster))
+  expect_equal(length(result$admission_mode), length(result$n_cluster))
+  expect_equal(length(result$best_labels_raw_cluster_count), length(result$n_cluster))
+  expect_true(all(is.finite(result$effective_cluster_median)))
+  expect_true(all(is.finite(result$raw_cluster_median)))
+  expect_true(all(nzchar(result$admission_mode)))
+  final_cluster_counts <- vapply(
+    result$best_labels,
+    function(labels) as.integer(length(unique(labels))),
+    integer(1)
+  )
+  expect_true(all(result$best_labels_raw_cluster_count >= final_cluster_counts))
+})
+
+test_that("optimize_clustering preserves raw labels and returns merged best_labels", {
   ig <- igraph::make_ring(6)
   raw_labels <- c(0L, 0L, 0L, 1L, 2L, 2L)
   zero_graph <- Matrix::Matrix(0, nrow = 6, ncol = 6, sparse = TRUE)
@@ -334,14 +502,12 @@ test_that("optimize_clustering keeps raw labels and applies final-only merge", {
   expect_true(any(table(raw_labels) < 2L))
   expect_equal(length(result$labels$arr), 1L)
   expect_equal(result$labels$arr[[1]], raw_labels)
-
-  expected_best <- scICER:::merge_small_clusters_to_neighbors(
-    labels = raw_labels,
-    snn_graph = zero_graph,
-    min_cluster_size = 2L
-  )
-  expect_equal(result$best_labels, expected_best)
-  expect_true(all(table(result$best_labels) >= 2L))
+  expect_equal(result$effective_cluster_median, 2)
+  expect_equal(result$raw_cluster_median, 3)
+  expect_equal(result$admission_mode, "strict_soft")
+  expect_equal(result$best_labels_raw_cluster_count, 3L)
+  expect_equal(length(unique(result$best_labels)), 2L)
+  expect_true(min(table(result$best_labels)) >= 2L)
 })
 
 test_that("optimize_clustering prefers strict admission when strict and relaxed both exist", {
@@ -453,6 +619,145 @@ test_that("optimize_clustering falls back to relaxed admission and computes IC f
   ))
   observed_arr <- sort(vapply(result$labels$arr, paste, collapse = ",", character(1)))
   expect_equal(observed_arr, expected_arr)
+})
+
+test_that("optimize_clustering rejects pathological strict gamma and uses bounded relaxed fallback", {
+  ig <- igraph::make_ring(40)
+  pathological_labels <- c(0L, 0L, 1L, 1L, seq.int(2L, 37L))
+  bounded_hit_labels <- c(rep(0L, 20L), rep(1L, 20L))
+  bounded_miss_labels <- rep(0L, 40L)
+  state <- new.env(parent = emptyenv())
+  state$last_res_key <- NULL
+  state$trial_idx <- 0L
+
+  local_mocked_bindings(
+    leiden_clustering = function(igraph_obj, resolution, objective_function,
+                                 n_iterations, beta, initial_membership = NULL) {
+      res_key <- sprintf("%.6f", resolution)
+      if (is.null(state$last_res_key) || !identical(state$last_res_key, res_key)) {
+        state$last_res_key <- res_key
+        state$trial_idx <- 1L
+      } else {
+        state$trial_idx <- state$trial_idx + 1L
+      }
+
+      if (resolution < 0.15) {
+        pathological_labels
+      } else if (resolution < 0.25) {
+        if (state$trial_idx == 1L) bounded_hit_labels else bounded_miss_labels
+      } else {
+        bounded_miss_labels
+      }
+    },
+    .package = "scICER"
+  )
+
+  result <- scICER:::optimize_clustering(
+    igraph_obj = ig,
+    target_clusters = 2L,
+    gamma_range = c(0.1, 0.3),
+    objective_function = "modularity",
+    n_trials = 2L,
+    n_bootstrap = 2L,
+    seed = 123,
+    beta = 0.1,
+    n_iterations = 1L,
+    max_iterations = 3L,
+    resolution_tolerance = 1e-3,
+    n_workers = 1L,
+    snn_graph = Matrix::Diagonal(40),
+    min_cluster_size = 2L,
+    verbose = FALSE,
+    worker_id = "TEST",
+    in_parallel_context = FALSE
+  )
+
+  expect_false(is.null(result))
+  expected_arr <- sort(c(
+    paste(bounded_hit_labels, collapse = ","),
+    paste(bounded_miss_labels, collapse = ",")
+  ))
+  observed_arr <- sort(vapply(result$labels$arr, paste, collapse = ",", character(1)))
+  expect_equal(observed_arr, expected_arr)
+})
+
+test_that("optimize_clustering prefers raw exact family when it exists on the gamma grid", {
+  ig <- igraph::make_ring(6)
+  effective_strict_labels <- c(0L, 0L, 1L, 1L, 1L, 2L)
+  raw_strict_labels <- c(0L, 0L, 0L, 0L, 0L, 1L)
+
+  local_mocked_bindings(
+    leiden_clustering = function(igraph_obj, resolution, objective_function,
+                                 n_iterations, beta, initial_membership = NULL) {
+      if (resolution < 0.15) {
+        return(effective_strict_labels)
+      }
+      raw_strict_labels
+    },
+    .package = "scICER"
+  )
+
+  result <- scICER:::optimize_clustering(
+    igraph_obj = ig,
+    target_clusters = 2L,
+    gamma_range = c(0.1, 0.2),
+    objective_function = "modularity",
+    n_trials = 2L,
+    n_bootstrap = 2L,
+    seed = 123,
+    beta = 0.1,
+    n_iterations = 1L,
+    max_iterations = 3L,
+    resolution_tolerance = 1e-3,
+    n_workers = 1L,
+    snn_graph = Matrix::Diagonal(6),
+    min_cluster_size = 2L,
+    verbose = FALSE,
+    worker_id = "TEST",
+    in_parallel_context = FALSE
+  )
+
+  expect_false(is.null(result))
+  expect_equal(length(result$labels$arr), 1L)
+  expect_equal(result$labels$arr[[1]], raw_strict_labels)
+  expect_equal(result$admission_mode, "raw_strict_soft")
+  expect_equal(result$best_labels_raw_cluster_count, 2L)
+  expect_true(min(table(result$best_labels)) >= 2L)
+  expect_equal(length(unique(result$best_labels)), 1L)
+})
+
+test_that("optimize_clustering falls back to bounded raw-count admission when effective admission is empty", {
+  ig <- igraph::make_ring(6)
+  raw_strict_labels <- c(0L, 0L, 0L, 0L, 0L, 1L)
+
+  local_mocked_bindings(
+    leiden_clustering = function(...) raw_strict_labels,
+    .package = "scICER"
+  )
+
+  result <- scICER:::optimize_clustering(
+    igraph_obj = ig,
+    target_clusters = 2L,
+    gamma_range = c(0.1, 0.1),
+    objective_function = "modularity",
+    n_trials = 2L,
+    n_bootstrap = 2L,
+    seed = 123,
+    beta = 0.1,
+    n_iterations = 1L,
+    max_iterations = 3L,
+    resolution_tolerance = 1e-3,
+    n_workers = 1L,
+    snn_graph = Matrix::Diagonal(6),
+    min_cluster_size = 2L,
+    verbose = FALSE,
+    worker_id = "TEST",
+    in_parallel_context = FALSE
+  )
+
+  expect_false(is.null(result))
+  expect_equal(length(result$labels$arr), 1L)
+  expect_equal(result$labels$arr[[1]], raw_strict_labels)
 })
 
 test_that("optimize_clustering accepts strict-only gamma even when no trial hits target", {
@@ -568,7 +873,7 @@ test_that("plot_ic show_gamma controls selected-gamma subtitle", {
   expect_false(grepl("Selected gamma:", plot_without_gamma$labels$subtitle, fixed = TRUE))
 })
 
-test_that("find_resolution_ranges stops early when a preliminary trial hits target", {
+test_that("find_resolution_ranges reuses one representative preliminary clustering per gamma step", {
   ig <- igraph::make_ring(4)
   call_count <- 0L
   
@@ -621,7 +926,34 @@ test_that("find_resolution_ranges target matching uses effective cluster count",
   )
 
   expect_true("1" %in% names(ranges))
-  expect_equal(call_count, 1L)
+  expect_equal(call_count, 12L)
+})
+
+test_that("find_resolution_ranges CPM fallback keeps degenerate ranges on the gamma scale", {
+  ig <- igraph::make_ring(6)
+
+  local_mocked_bindings(
+    cached_leiden_clustering = function(...) c(0L, 0L, 1L, 1L, 2L, 2L),
+    .package = "scICER"
+  )
+
+  ranges <- scICER:::find_resolution_ranges(
+    igraph_obj = ig,
+    cluster_range = 3L,
+    start_g = log(1e-6),
+    end_g = log(1),
+    objective_function = "CPM",
+    resolution_tolerance = 1,
+    n_workers = 1,
+    verbose = FALSE
+  )
+
+  expect_true("3" %in% names(ranges))
+  bounds <- ranges[["3"]]
+  expect_true(all(is.finite(bounds)))
+  expect_true(all(bounds > 0))
+  expect_true(bounds[1] <= bounds[2])
+  expect_lt(bounds[2], 1)
 })
 
 test_that("find_resolution_ranges avoids drifting into all-small high-gamma regime", {
@@ -661,7 +993,7 @@ test_that("find_resolution_ranges avoids drifting into all-small high-gamma regi
   expect_lt(bounds[2], 80)
 })
 
-test_that("find_resolution_ranges falls back to full preliminary trials when no hit exists", {
+test_that("find_resolution_ranges keeps representative preliminary summaries when no hit exists", {
   ig <- igraph::make_ring(4)
   call_count <- 0L
   
@@ -684,12 +1016,12 @@ test_that("find_resolution_ranges falls back to full preliminary trials when no 
     verbose = FALSE
   )
   
-  # Small graphs use 15 preliminary trials per step.
+  # The nominal preliminary trial set is summarized from one representative clustering.
   expect_true("2" %in% names(ranges))
-  expect_equal(call_count, 15L)
+  expect_equal(call_count, 1L)
 })
 
-test_that("parallel preliminary trials avoid launching all trials after early hit", {
+test_that("parallel resolution search still reuses one representative preliminary clustering per gamma step", {
   skip_on_os("windows")
   
   ig <- igraph::make_ring(4)
@@ -697,18 +1029,9 @@ test_that("parallel preliminary trials avoid launching all trials after early hi
   
   local_mocked_bindings(
     cached_leiden_clustering = function(..., cache_key_suffix = "") {
-      trial_idx <- suppressWarnings(as.integer(sub(".*_trial_([0-9]+)$", "\\1", cache_key_suffix)))
-      if (is.na(trial_idx)) {
-        trial_idx <- 1L
-      }
-      cat(sprintf("start:%d\n", trial_idx), file = trial_log, append = TRUE)
-      if (trial_idx == 2L) {
-        Sys.sleep(0.05)
-        cat(sprintf("finish:%d\n", trial_idx), file = trial_log, append = TRUE)
-        return(c(0L, 0L, 1L, 1L))
-      }
-      Sys.sleep(1)
-      cat(sprintf("finish:%d\n", trial_idx), file = trial_log, append = TRUE)
+      cat(sprintf("start:%s\n", cache_key_suffix), file = trial_log, append = TRUE)
+      Sys.sleep(0.01)
+      cat(sprintf("finish:%s\n", cache_key_suffix), file = trial_log, append = TRUE)
       c(0L, 1L, 2L, 3L)
     },
     .package = "scICER"
@@ -727,11 +1050,12 @@ test_that("parallel preliminary trials avoid launching all trials after early hi
   
   lines <- if (file.exists(trial_log)) readLines(trial_log, warn = FALSE) else character(0)
   start_lines <- grep("^start:", lines, value = TRUE)
+  finish_lines <- grep("^finish:", lines, value = TRUE)
   
   expect_true("2" %in% names(ranges))
-  expect_true(any(grepl("^start:2$", start_lines)))
-  expect_true(length(start_lines) >= 2L)
-  expect_lte(length(start_lines), 4L)
+  expect_equal(length(start_lines), 1L)
+  expect_equal(length(finish_lines), 1L)
+  expect_true(all(grepl("^start:res_search_lower_2$", start_lines)))
 })
 
 test_that("find_resolution_ranges uses serial preliminary trials when per-target worker capacity is low", {

@@ -64,6 +64,280 @@ count_effective_clusters <- function(labels, min_cluster_size = 1L) {
   as.integer(sum(cluster_sizes >= min_cluster_size))
 }
 
+# Raw-cluster guard thresholds for effective-cluster matching.
+raw_cluster_guard_limits <- function(target_clusters) {
+  target_clusters <- max(1L, as.integer(target_clusters))
+  list(
+    soft = as.integer(max(target_clusters + 3L, ceiling(target_clusters * 1.1))),
+    hard = as.integer(max(target_clusters + 5L, ceiling(target_clusters * 1.5)))
+  )
+}
+
+raw_cluster_search_upper <- function(target_clusters) {
+  target_clusters <- max(1L, as.integer(target_clusters))
+  if (target_clusters <= 10L) {
+    return(as.integer(target_clusters + 1L))
+  }
+  as.integer(max(target_clusters + 2L, ceiling(target_clusters * 1.05)))
+}
+
+build_gamma_sequence_for_range <- function(gamma_range, objective_function,
+                                           resolution_tolerance,
+                                           n_vertices = NA_integer_) {
+  gamma_range <- as.numeric(gamma_range)
+  if (length(gamma_range) != 2L || anyNA(gamma_range) || any(!is.finite(gamma_range))) {
+    stop("gamma_range must contain two finite numeric bounds.")
+  }
+
+  range_width <- abs(gamma_range[2] - gamma_range[1])
+  n_steps <- if (!is.na(n_vertices) &&
+                 n_vertices >= 200000 &&
+                 range_width <= max(resolution_tolerance * 10, .Machine$double.eps)) {
+    5L
+  } else {
+    11L
+  }
+
+  if (objective_function == "modularity") {
+    if (abs(gamma_range[2] - gamma_range[1]) > resolution_tolerance) {
+      return(seq(gamma_range[1], gamma_range[2], length.out = n_steps))
+    }
+    delta_g <- resolution_tolerance
+    return(seq(gamma_range[1] - delta_g, gamma_range[1] + delta_g, length.out = n_steps))
+  }
+
+  lower <- max(min(gamma_range), .Machine$double.xmin)
+  upper <- max(max(gamma_range), .Machine$double.xmin)
+  if (abs(upper - lower) > max(resolution_tolerance, lower * 1e-6)) {
+    return(exp(seq(log(lower), log(upper), length.out = n_steps)))
+  }
+
+  delta_log <- max(resolution_tolerance, 1e-4)
+  exp(seq(log(lower) - delta_log, log(lower) + delta_log, length.out = n_steps))
+}
+
+stabilize_probe_raw_medians <- function(raw_cluster_medians) {
+  raw_cluster_medians <- as.numeric(raw_cluster_medians)
+  finite_indices <- which(is.finite(raw_cluster_medians))
+  if (length(finite_indices) <= 1L) {
+    return(raw_cluster_medians)
+  }
+
+  raw_cluster_medians[finite_indices] <- cummax(raw_cluster_medians[finite_indices])
+  raw_cluster_medians
+}
+
+clamp_gamma_range_to_raw_plateau <- function(gamma_sequence, raw_cluster_medians,
+                                             target_clusters) {
+  gamma_sequence <- as.numeric(gamma_sequence)
+  raw_cluster_medians <- as.numeric(raw_cluster_medians)
+  target_clusters <- as.integer(target_clusters)
+
+  if (length(gamma_sequence) != length(raw_cluster_medians) || length(gamma_sequence) == 0L) {
+    stop("gamma_sequence and raw_cluster_medians must have the same non-zero length.")
+  }
+
+  stabilized_raw_medians <- stabilize_probe_raw_medians(raw_cluster_medians)
+  coarse_bounds <- range(gamma_sequence)
+  exact_indices <- which(
+    !is.na(stabilized_raw_medians) & stabilized_raw_medians == target_clusters
+  )
+  if (length(exact_indices) > 0L) {
+    return(list(
+      bounds = range(gamma_sequence[exact_indices]),
+      mode = "raw_exact",
+      indices = exact_indices,
+      stabilized_raw_medians = stabilized_raw_medians
+    ))
+  }
+
+  left_raw <- stabilized_raw_medians[-length(stabilized_raw_medians)]
+  right_raw <- stabilized_raw_medians[-1L]
+  crossing_indices <- which(
+    !is.na(left_raw) &
+      !is.na(right_raw) &
+      ((left_raw < target_clusters & right_raw > target_clusters) |
+         (left_raw > target_clusters & right_raw < target_clusters))
+  )
+  if (length(crossing_indices) > 0L) {
+    widths <- abs(gamma_sequence[crossing_indices + 1L] - gamma_sequence[crossing_indices])
+    best_pair_idx <- crossing_indices[[which.min(widths)]]
+    return(list(
+      bounds = sort(gamma_sequence[c(best_pair_idx, best_pair_idx + 1L)]),
+      mode = "raw_bracket",
+      indices = c(best_pair_idx, best_pair_idx + 1L),
+      stabilized_raw_medians = stabilized_raw_medians
+    ))
+  }
+
+  near_target_indices <- which(
+    !is.na(stabilized_raw_medians) & abs(stabilized_raw_medians - target_clusters) <= 1
+  )
+  if (length(near_target_indices) > 0L) {
+    return(list(
+      bounds = range(gamma_sequence[near_target_indices]),
+      mode = "raw_near_target",
+      indices = near_target_indices,
+      stabilized_raw_medians = stabilized_raw_medians
+    ))
+  }
+
+  list(
+    bounds = coarse_bounds,
+    mode = "coarse",
+    indices = seq_along(gamma_sequence),
+    stabilized_raw_medians = stabilized_raw_medians
+  )
+}
+
+# Reject pathological effective matches with absurd raw cluster counts.
+passes_raw_cluster_guard <- function(raw_cluster_median, target_clusters,
+                                     min_cluster_size = 1L,
+                                     level = c("soft", "hard")) {
+  level <- match.arg(level)
+  target_clusters <- as.integer(target_clusters)
+  min_cluster_size <- max(1L, as.integer(min_cluster_size))
+  if (min_cluster_size <= 1L || is.na(target_clusters) || target_clusters <= 1L) {
+    return(rep(TRUE, length(raw_cluster_median)))
+  }
+
+  raw_cluster_median <- as.numeric(raw_cluster_median)
+  limits <- raw_cluster_guard_limits(target_clusters)
+  upper_bound <- if (identical(level, "soft")) limits$soft else limits$hard
+
+  !is.na(raw_cluster_median) & raw_cluster_median <= upper_bound
+}
+
+# Classify one resolution-search gamma using raw/effective median counts.
+classify_resolution_search_state <- function(raw_cluster_median, effective_cluster_median,
+                                             target_clusters, min_cluster_size = 1L) {
+  target_clusters <- as.integer(target_clusters)
+  raw_cluster_median <- as.numeric(raw_cluster_median)
+  effective_cluster_median <- as.numeric(effective_cluster_median)
+  raw_guard_soft <- passes_raw_cluster_guard(
+    raw_cluster_median,
+    target_clusters,
+    min_cluster_size = min_cluster_size,
+    level = "soft"
+  )
+  raw_guard_search <- if (min_cluster_size <= 1L || is.na(target_clusters) || target_clusters <= 1L) {
+    TRUE
+  } else {
+    !is.na(raw_cluster_median) && raw_cluster_median <= raw_cluster_search_upper(target_clusters)
+  }
+  raw_below <- !is.na(raw_cluster_median) && raw_cluster_median < target_clusters
+  raw_above_soft <- !raw_below && !isTRUE(raw_guard_search)
+  raw_in_band <- !raw_below && !raw_above_soft
+  effective_meets_target <- !is.na(effective_cluster_median) &&
+    effective_cluster_median >= target_clusters
+  over_fragmented <- !raw_below && !effective_meets_target
+  raw_class <- if (raw_below) {
+    "raw_below"
+  } else if (raw_above_soft) {
+    "raw_above_soft"
+  } else {
+    "raw_in_band"
+  }
+  lower_action <- if (raw_below) "increase_gamma" else "decrease_gamma"
+  upper_action <- if (raw_below || (raw_in_band && effective_meets_target)) {
+    "increase_gamma"
+  } else {
+    "decrease_gamma"
+  }
+  list(
+    raw_class = raw_class,
+    raw_below = raw_below,
+    raw_in_band = raw_in_band,
+    raw_above_soft = raw_above_soft,
+    raw_guard_soft = raw_guard_soft,
+    raw_guard_search = raw_guard_search,
+    effective_meets_target = effective_meets_target,
+    over_fragmented = over_fragmented,
+    lower_action = lower_action,
+    upper_action = upper_action
+  )
+}
+
+# Apply raw-exact-first admission with progressively looser effective/raw fallbacks.
+select_gamma_admission <- function(strict_flags, relaxed_flags,
+                                   soft_guard_flags, hard_guard_flags,
+                                   raw_strict_flags = NULL,
+                                   raw_relaxed_flags = NULL) {
+  if (is.null(raw_strict_flags)) {
+    raw_strict_flags <- rep(FALSE, length(strict_flags))
+  }
+  if (is.null(raw_relaxed_flags)) {
+    raw_relaxed_flags <- rep(FALSE, length(relaxed_flags))
+  }
+
+  candidate_sets <- list(
+    raw_strict_soft = which(raw_strict_flags & soft_guard_flags),
+    strict_soft = which(strict_flags & soft_guard_flags),
+    relaxed_soft = which(relaxed_flags & soft_guard_flags),
+    strict_hard = which(strict_flags & hard_guard_flags),
+    relaxed_hard = which(relaxed_flags & hard_guard_flags),
+    relaxed_unguarded = which(relaxed_flags),
+    raw_relaxed_soft = which(raw_relaxed_flags & soft_guard_flags),
+    raw_relaxed_hard = which(raw_relaxed_flags & hard_guard_flags),
+    raw_relaxed_unguarded = which(raw_relaxed_flags)
+  )
+
+  for (mode in names(candidate_sets)) {
+    indices <- candidate_sets[[mode]]
+    if (length(indices) > 0L) {
+      return(list(indices = indices, mode = mode))
+    }
+  }
+
+  list(indices = integer(0), mode = "none")
+}
+
+extract_raw_median_gap <- function(result, target_clusters) {
+  if (is.null(result$raw_median_gap)) {
+    return(abs(as.numeric(result$mean_clusters) - target_clusters))
+  }
+  as.numeric(result$raw_median_gap)
+}
+
+refine_gamma_candidates_by_raw_gap <- function(valid_indices, admission_mode,
+                                               gamma_results, target_clusters,
+                                               min_cluster_size = 1L) {
+  if (length(valid_indices) == 0L || min_cluster_size <= 1L) {
+    return(list(
+      indices = valid_indices,
+      mode = admission_mode,
+      raw_gaps = numeric(0),
+      best_raw_gap = Inf
+    ))
+  }
+
+  selected_raw_gaps <- vapply(
+    gamma_results[valid_indices],
+    extract_raw_median_gap,
+    numeric(1),
+    target_clusters = target_clusters
+  )
+  best_raw_gap <- Inf
+  if (any(is.finite(selected_raw_gaps))) {
+    best_raw_gap <- min(selected_raw_gaps[is.finite(selected_raw_gaps)])
+  }
+
+  if (length(valid_indices) > 1L && any(is.finite(selected_raw_gaps))) {
+    keep_mask <- is.finite(selected_raw_gaps) & selected_raw_gaps == best_raw_gap
+    if (any(keep_mask) && sum(keep_mask) < length(valid_indices)) {
+      valid_indices <- valid_indices[keep_mask]
+      selected_raw_gaps <- selected_raw_gaps[keep_mask]
+    }
+  }
+
+  list(
+    indices = valid_indices,
+    mode = admission_mode,
+    raw_gaps = selected_raw_gaps,
+    best_raw_gap = best_raw_gap
+  )
+}
+
 #' Sample one value using a fixed seed without leaking RNG state
 #'
 #' @param values Candidate values
@@ -770,6 +1044,10 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
     ic = numeric(),
     ic_vec = list(),
     best_labels = list(),
+    effective_cluster_median = numeric(),
+    raw_cluster_median = numeric(),
+    admission_mode = character(),
+    best_labels_raw_cluster_count = integer(),
     n_iter = integer(),
     mei = list(),
     k = integer(),
@@ -968,6 +1246,10 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
         ic = NA_real_,
         ic_vec = list(NULL),
         best_labels = list(NULL),
+        effective_cluster_median = NA_real_,
+        raw_cluster_median = NA_real_,
+        admission_mode = NA_character_,
+        best_labels_raw_cluster_count = NA_integer_,
         n_iter = NA_integer_,
         mei = list(NULL),
         k = NA_integer_,
@@ -991,6 +1273,10 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
       ic = numeric(),
       ic_vec = list(),
       best_labels = list(),
+      effective_cluster_median = numeric(),
+      raw_cluster_median = numeric(),
+      admission_mode = character(),
+      best_labels_raw_cluster_count = integer(),
       n_iter = integer(),
       mei = list(),
       k = integer(),
@@ -1014,6 +1300,10 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
       ic_vec = excluded_entries$ic_vec,
       n_cluster = excluded_entries$cluster_number,
       best_labels = excluded_entries$best_labels,
+      effective_cluster_median = excluded_entries$effective_cluster_median,
+      raw_cluster_median = excluded_entries$raw_cluster_median,
+      admission_mode = excluded_entries$admission_mode,
+      best_labels_raw_cluster_count = excluded_entries$best_labels_raw_cluster_count,
       n_iter = excluded_entries$n_iter,
       mei = excluded_entries$mei,
       k = excluded_entries$k,
@@ -1032,7 +1322,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   # Windows compatibility for clustering optimization
   actual_workers_opt <- if (.Platform$OS.type == "windows" && n_workers > 1) 1 else n_workers
   active_cluster_workers_opt <- 1L
-  per_cluster_worker_budget <- 1L
+  cluster_worker_budget <- 1L
 
   if (length(valid_clusters) > 0) {
     n_vertices <- igraph::vcount(igraph_obj)
@@ -1054,42 +1344,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
     ))
     actual_workers_opt <- cap_workers_by_memory(actual_workers_opt, max_cluster_bytes, runtime_context)
     active_cluster_workers_opt <- max(1L, min(as.integer(length(valid_clusters)), as.integer(actual_workers_opt)))
-
-    # Reserve a minimum nested budget per cluster for heavy workloads to reduce long-tail stragglers.
-    min_inner_workers <- if (n_bootstrap >= 200L || n_trials >= 30L) {
-      4L
-    } else if (n_bootstrap >= 100L || n_trials >= 20L) {
-      3L
-    } else {
-      2L
-    }
-    if (actual_workers_opt > 1L && length(valid_clusters) > 1L) {
-      max_outer_workers_for_inner_budget <- max(
-        1L,
-        as.integer(floor(as.double(actual_workers_opt) / as.double(min_inner_workers)))
-      )
-      active_cluster_workers_opt <- max(
-        1L,
-        min(active_cluster_workers_opt, max_outer_workers_for_inner_budget)
-      )
-    }
-
-    per_cluster_worker_budget <- max(1L, as.integer(floor(as.double(actual_workers_opt) / active_cluster_workers_opt)))
-    per_cluster_worker_budget <- cap_workers_by_memory(
-      per_cluster_worker_budget,
-      estimate_trial_matrix_bytes(n_vertices, n_trials, 1L),
-      runtime_context
-    )
-
-    # Keep outer x inner worker product within global worker cap.
-    active_cluster_workers_opt <- max(
-      1L,
-      min(
-        as.integer(length(valid_clusters)),
-        as.integer(actual_workers_opt),
-        as.integer(floor(as.double(actual_workers_opt) / as.double(per_cluster_worker_budget)))
-      )
-    )
+    cluster_worker_budget <- max(1L, as.integer(actual_workers_opt))
 
     if (should_enable_spill(runtime_context, max_cluster_bytes)) {
       activate_runtime_spill(runtime_context, estimated_bytes = max_cluster_bytes)
@@ -1099,7 +1354,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   if (verbose) {
     scice_message(paste("CLUSTERING_MAIN: Using", actual_workers_opt, "workers for optimization"))
     scice_message(paste("CLUSTERING_MAIN: Active cluster workers:", active_cluster_workers_opt))
-    scice_message(paste("CLUSTERING_MAIN: Per-cluster worker budget:", per_cluster_worker_budget))
+    scice_message(paste("CLUSTERING_MAIN: Per-cluster worker budget:", cluster_worker_budget))
     scice_message("CLUSTERING_MAIN: Optimization scheduling - dynamic worker queue (mc.preschedule = FALSE)")
     scice_message(paste("CLUSTERING_MAIN: Progress tracking:"))
     progress_start_time <- Sys.time()
@@ -1140,7 +1395,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
     result <- optimize_clustering(
       igraph_obj, cluster_num, gamma_range, objective_function,
       n_trials, n_bootstrap, seed, beta, n_iterations, max_iterations,
-      resolution_tolerance, per_cluster_worker_budget, snn_graph, min_cluster_size, verbose,
+      resolution_tolerance, cluster_worker_budget, snn_graph, min_cluster_size, verbose,
       worker_id, in_parallel_context = TRUE,
       runtime_context = runtime_context
     )
@@ -1162,6 +1417,10 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
         ic = result$ic_median,
         ic_vec = list(result$ic_bootstrap),
         best_labels = list(result$best_labels),
+        effective_cluster_median = result$effective_cluster_median,
+        raw_cluster_median = result$raw_cluster_median,
+        admission_mode = result$admission_mode,
+        best_labels_raw_cluster_count = result$best_labels_raw_cluster_count,
         n_iter = result$n_iterations,
         mei = list(mei_scores),
         k = result$k,
@@ -1192,6 +1451,10 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
       ic = numeric(),
       ic_vec = list(),
       best_labels = list(),
+      effective_cluster_median = numeric(),
+      raw_cluster_median = numeric(),
+      admission_mode = character(),
+      best_labels_raw_cluster_count = integer(),
       n_iter = integer(),
       mei = list(),
       k = integer(),
@@ -1219,6 +1482,10 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
               "ic" = numeric(nrow(excluded_entries)),
               "ic_vec" = rep(list(NULL), nrow(excluded_entries)),
               "best_labels" = rep(list(NULL), nrow(excluded_entries)),
+              "effective_cluster_median" = rep(NA_real_, nrow(excluded_entries)),
+              "raw_cluster_median" = rep(NA_real_, nrow(excluded_entries)),
+              "admission_mode" = rep(NA_character_, nrow(excluded_entries)),
+              "best_labels_raw_cluster_count" = rep(NA_integer_, nrow(excluded_entries)),
               "n_iter" = integer(nrow(excluded_entries)),
               "mei" = rep(list(NULL), nrow(excluded_entries)),
               "k" = integer(nrow(excluded_entries)),
@@ -1233,6 +1500,10 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
               "ic" = numeric(nrow(successful_results)),
               "ic_vec" = rep(list(NULL), nrow(successful_results)),
               "best_labels" = rep(list(NULL), nrow(successful_results)),
+              "effective_cluster_median" = rep(NA_real_, nrow(successful_results)),
+              "raw_cluster_median" = rep(NA_real_, nrow(successful_results)),
+              "admission_mode" = rep(NA_character_, nrow(successful_results)),
+              "best_labels_raw_cluster_count" = rep(NA_integer_, nrow(successful_results)),
               "n_iter" = integer(nrow(successful_results)),
               "mei" = rep(list(NULL), nrow(successful_results)),
               "k" = integer(nrow(successful_results)),
@@ -1255,6 +1526,10 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
         ic = numeric(),
         ic_vec = list(),
         best_labels = list(),
+        effective_cluster_median = numeric(),
+        raw_cluster_median = numeric(),
+        admission_mode = character(),
+        best_labels_raw_cluster_count = integer(),
         n_iter = integer(),
         mei = list(),
         k = integer(),
@@ -1271,6 +1546,10 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
       ic = numeric(),
       ic_vec = list(),
       best_labels = list(),
+      effective_cluster_median = numeric(),
+      raw_cluster_median = numeric(),
+      admission_mode = character(),
+      best_labels_raw_cluster_count = integer(),
       n_iter = integer(),
       mei = list(),
       k = integer(),
@@ -1282,6 +1561,53 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   # Sort by cluster number (only if the column exists and there are rows)
   if (nrow(results_dt) > 0 && "cluster_number" %in% colnames(results_dt)) {
     data.table::setorder(results_dt, cluster_number)
+  }
+
+  if (verbose &&
+      nrow(results_dt) > 0 &&
+      all(c(
+        "cluster_number", "gamma", "effective_cluster_median",
+        "raw_cluster_median", "admission_mode",
+        "best_labels_raw_cluster_count", "excluded"
+      ) %in% colnames(results_dt))) {
+    format_diag_value <- function(x, digits = 6L) {
+      if (length(x) == 0L || is.na(x)) {
+        return("NA")
+      }
+      as.character(signif(x, digits))
+    }
+    scice_message("CLUSTERING_MAIN: Per-k selection diagnostics:")
+    for (row_idx in seq_len(nrow(results_dt))) {
+      cluster_num <- results_dt$cluster_number[[row_idx]]
+      if (isTRUE(results_dt$excluded[[row_idx]])) {
+        scice_message(
+          paste(
+            "CLUSTERING_MAIN:   k =", cluster_num,
+            "- excluded = TRUE",
+            "- reason =", results_dt$exclusion_reason[[row_idx]]
+          )
+        )
+        next
+      }
+      scice_message(
+        paste(
+          "CLUSTERING_MAIN:   k =", cluster_num,
+          "- gamma =", format_diag_value(results_dt$gamma[[row_idx]]),
+          "- effective_median =", format_diag_value(results_dt$effective_cluster_median[[row_idx]]),
+          "- raw_median =", format_diag_value(results_dt$raw_cluster_median[[row_idx]]),
+          "- admission_mode =", ifelse(
+            is.na(results_dt$admission_mode[[row_idx]]),
+            "NA",
+            results_dt$admission_mode[[row_idx]]
+          ),
+          "- best_labels_raw_clusters =", ifelse(
+            is.na(results_dt$best_labels_raw_cluster_count[[row_idx]]),
+            "NA",
+            as.character(results_dt$best_labels_raw_cluster_count[[row_idx]])
+          )
+        )
+      )
+    }
   }
   
   # Report cache statistics for performance monitoring
@@ -1299,6 +1625,10 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
     ic_vec = if ("ic_vec" %in% colnames(results_dt)) results_dt$ic_vec else list(),
     n_cluster = if ("cluster_number" %in% colnames(results_dt)) results_dt$cluster_number else integer(0),
     best_labels = if ("best_labels" %in% colnames(results_dt)) results_dt$best_labels else list(),
+    effective_cluster_median = if ("effective_cluster_median" %in% colnames(results_dt)) results_dt$effective_cluster_median else numeric(0),
+    raw_cluster_median = if ("raw_cluster_median" %in% colnames(results_dt)) results_dt$raw_cluster_median else numeric(0),
+    admission_mode = if ("admission_mode" %in% colnames(results_dt)) results_dt$admission_mode else character(0),
+    best_labels_raw_cluster_count = if ("best_labels_raw_cluster_count" %in% colnames(results_dt)) results_dt$best_labels_raw_cluster_count else integer(0),
     n_iter = if ("n_iter" %in% colnames(results_dt)) results_dt$n_iter else integer(0),
     mei = if ("mei" %in% colnames(results_dt)) results_dt$mei else list(),
     k = if ("k" %in% colnames(results_dt)) results_dt$k else integer(0),
@@ -1470,16 +1800,14 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
     )
     scice_message(
       paste(
-        "RESOLUTION_SEARCH: Preliminary trial strategy - early stop on first trial reaching target k; fallback to median when no trial hits target."
+        "RESOLUTION_SEARCH: Preliminary trial strategy - reuse one representative preliminary clustering per gamma step and summarize nominal median effective/raw counts."
       )
     )
   }
   
   range_results <- cross_platform_mclapply(cluster_range, function(target_clusters) {
-    early_stop_count <- 0L
-    fallback_count <- 0L
-    early_stop_saved_trials <- 0L
     trial_steps <- 0L
+    total_preliminary_elapsed <- 0
     heartbeat <- create_heartbeat_logger(
       verbose = verbose,
       context = paste("RESOLUTION_SEARCH: k =", target_clusters)
@@ -1497,15 +1825,15 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
     }
     
     run_single_trial_count <- function(trial_idx, gamma_val, cache_suffix_base, seed_base,
-                                       use_cache, use_trial_suffix) {
+                                       use_cache = FALSE) {
       trial_seed <- derive_trial_seed(seed_base, trial_idx)
       if (!is.null(trial_seed)) {
         set.seed(trial_seed)
       }
-      suffix <- if (use_trial_suffix) {
-        paste(cache_suffix_base, "trial", trial_idx, sep = "_")
-      } else {
+      cache_key_suffix <- if (isTRUE(use_cache)) {
         cache_suffix_base
+      } else {
+        paste(cache_suffix_base, "trial", trial_idx, sep = "_")
       }
       labels <- cached_leiden_clustering(
         igraph_obj,
@@ -1514,27 +1842,25 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
         n_iter_preliminary,
         beta_preliminary,
         use_cache = use_cache,
-        cache_key_suffix = suffix,
+        cache_key_suffix = cache_key_suffix,
         snn_graph = snn_graph,
         min_cluster_size = min_cluster_size
       )
       effective_count <- count_effective_clusters(labels, min_cluster_size = min_cluster_size)
       raw_count <- as.integer(length(unique(labels)))
-      c(effective_count = as.integer(effective_count), raw_count = raw_count)
+      c(
+        effective_count = as.integer(effective_count),
+        raw_count = raw_count
+      )
     }
     
     run_preliminary_trials <- function(gamma_val, cache_suffix_base, seed_base = NULL,
                                        phase_label, iteration_idx) {
       step_start_time <- Sys.time()
-      trial_counts <- integer(0)
-      raw_trial_counts <- integer(0)
-      early_stop <- FALSE
-      early_trial_idx <- NA_integer_
-      launched_trials <- 0L
-      completed_trials <- 0L
-      killed_trials <- 0L
+      trial_counts <- integer(n_preliminary_trials)
+      raw_trial_counts <- integer(n_preliminary_trials)
       unpack_trial_counts <- function(trial_value, trial_idx_for_error = NA_integer_) {
-        parsed <- suppressWarnings(as.integer(trial_value))
+        parsed <- suppressWarnings(as.numeric(trial_value))
         if (length(parsed) == 1L && !is.na(parsed[1])) {
           return(c(effective = parsed[1], raw = parsed[1]))
         }
@@ -1553,203 +1879,23 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
       heartbeat(function() {
         paste(
           phase_label, "step", iteration_idx,
-          "- preliminary trials started for gamma", signif(gamma_val, 6)
+          "- representative preliminary evaluation started for gamma", signif(gamma_val, 6)
         )
       })
+      trial_result <- run_single_trial_count(
+        trial_idx = 0L,
+        gamma_val = gamma_val,
+        cache_suffix_base = cache_suffix_base,
+        seed_base = seed_base,
+        use_cache = TRUE
+      )
+      trial_pair <- unpack_trial_counts(trial_result, trial_idx_for_error = 0L)
+      trial_counts[] <- as.integer(trial_pair[["effective"]])
+      raw_trial_counts[] <- as.integer(trial_pair[["raw"]])
       
-      if (.Platform$OS.type == "windows" || preliminary_trial_workers <= 1L) {
-        for (trial_idx in seq_len(n_preliminary_trials)) {
-          heartbeat(function() {
-            paste(
-              phase_label, "step", iteration_idx,
-              "- running preliminary trial", trial_idx, "/", n_preliminary_trials
-            )
-          })
-          launched_trials <- launched_trials + 1L
-          trial_result <- run_single_trial_count(
-            trial_idx = trial_idx,
-            gamma_val = gamma_val,
-            cache_suffix_base = cache_suffix_base,
-            seed_base = seed_base,
-            use_cache = TRUE,
-            use_trial_suffix = FALSE
-          )
-          trial_pair <- unpack_trial_counts(trial_result, trial_idx_for_error = trial_idx)
-          n_clusters <- as.integer(trial_pair[["effective"]])
-          raw_clusters <- as.integer(trial_pair[["raw"]])
-          trial_counts <- c(trial_counts, n_clusters)
-          raw_trial_counts <- c(raw_trial_counts, raw_clusters)
-          completed_trials <- completed_trials + 1L
-          heartbeat(function() {
-            paste(
-              phase_label, "step", iteration_idx,
-              "- preliminary trials", completed_trials, "/", n_preliminary_trials
-            )
-          })
-          if (n_clusters == target_clusters) {
-            early_stop <- TRUE
-            early_trial_idx <- trial_idx
-            break
-          }
-        }
-      } else {
-        next_trial_idx <- 1L
-        active_jobs <- list()
-        active_job_trials <- list()
-        active_job_started <- list()
-        
-        launch_trial <- function(trial_idx) {
-          job <- parallel::mcparallel({
-            run_single_trial_count(
-              trial_idx = trial_idx,
-              gamma_val = gamma_val,
-              cache_suffix_base = cache_suffix_base,
-              seed_base = seed_base,
-              use_cache = FALSE,
-              use_trial_suffix = TRUE
-            )
-          }, silent = TRUE)
-          pid_name <- as.character(job$pid)
-          active_jobs[[pid_name]] <<- job
-          active_job_trials[[pid_name]] <<- trial_idx
-          active_job_started[[pid_name]] <<- Sys.time()
-          launched_trials <<- launched_trials + 1L
-        }
-        
-        fill_active_jobs <- function() {
-          while (!early_stop &&
-                 next_trial_idx <= n_preliminary_trials &&
-                 length(active_jobs) < preliminary_trial_workers) {
-            launch_trial(next_trial_idx)
-            next_trial_idx <<- next_trial_idx + 1L
-          }
-        }
-        
-        fill_active_jobs()
-        
-        while (!early_stop && length(active_jobs) > 0L) {
-          ready <- parallel::mccollect(active_jobs, wait = FALSE, timeout = 0.05)
-          if (is.null(ready) || length(ready) == 0L) {
-            now <- Sys.time()
-            step_elapsed <- round(as.numeric(difftime(now, step_start_time, units = "secs")), 1)
-            running_pids <- names(active_jobs)
-            running_trials <- if (length(running_pids) > 0L) {
-              vapply(running_pids, function(pid_name) as.integer(active_job_trials[[pid_name]]), integer(1))
-            } else {
-              integer(0)
-            }
-            running_preview <- if (length(running_trials) > 0L) {
-              paste(head(sort(unique(running_trials)), 5L), collapse = ",")
-            } else {
-              "none"
-            }
-            running_suffix <- if (length(unique(running_trials)) > 5L) ",..." else ""
-            longest_trial <- NA_integer_
-            longest_runtime <- 0
-            if (length(running_pids) > 0L) {
-              running_ages <- vapply(
-                running_pids,
-                function(pid_name) as.numeric(difftime(now, active_job_started[[pid_name]], units = "secs")),
-                numeric(1)
-              )
-              longest_idx <- which.max(running_ages)
-              longest_trial <- as.integer(active_job_trials[[running_pids[longest_idx]]])
-              longest_runtime <- round(running_ages[longest_idx], 1)
-            }
-            heartbeat(function() {
-              paste(
-                phase_label, "step", iteration_idx,
-                "- waiting preliminary trials; launched", launched_trials, "/", n_preliminary_trials,
-                "completed", completed_trials, "/", n_preliminary_trials,
-                "- active jobs", length(active_jobs),
-                "- running trials", paste0("[", running_preview, running_suffix, "]"),
-                "- longest running trial", if (is.na(longest_trial)) "NA" else longest_trial,
-                "for", longest_runtime, "s",
-                "- step elapsed", step_elapsed, "s"
-              )
-            })
-            Sys.sleep(0.05)
-            next
-          }
-          
-          for (pid_name in names(ready)) {
-            trial_idx <- as.integer(active_job_trials[[pid_name]])
-            trial_value <- ready[[pid_name]]
-            active_jobs[[pid_name]] <- NULL
-            active_job_trials[[pid_name]] <- NULL
-            active_job_started[[pid_name]] <- NULL
-            
-            if (inherits(trial_value, "try-error") || is.null(trial_value)) {
-              stop(
-                paste(
-                  "Preliminary trial failed for k =", target_clusters,
-                  "phase =", phase_label,
-                  "iteration =", iteration_idx,
-                  "trial =", trial_idx
-                )
-              )
-            }
-            
-            trial_pair <- unpack_trial_counts(
-              trial_value,
-              trial_idx_for_error = trial_idx
-            )
-            n_clusters <- as.integer(trial_pair[["effective"]])
-            raw_clusters <- as.integer(trial_pair[["raw"]])
-            
-            trial_counts <- c(trial_counts, n_clusters)
-            raw_trial_counts <- c(raw_trial_counts, raw_clusters)
-            completed_trials <- completed_trials + 1L
-            
-            if (n_clusters == target_clusters && !early_stop) {
-              early_stop <- TRUE
-              early_trial_idx <- trial_idx
-            }
-          }
-          
-          if (!early_stop) {
-            fill_active_jobs()
-          }
-        }
-        
-        if (early_stop && length(active_jobs) > 0L) {
-          killed_trials <- length(active_jobs)
-          for (pid_name in names(active_jobs)) {
-            try(parallel::mckill(active_jobs[[pid_name]]), silent = TRUE)
-          }
-          try(suppressWarnings(parallel::mccollect(active_jobs, wait = TRUE)), silent = TRUE)
-          active_jobs <- list()
-          active_job_trials <- list()
-          active_job_started <- list()
-        } else if (!early_stop && length(active_jobs) > 0L) {
-          trailing_results <- parallel::mccollect(active_jobs, wait = TRUE)
-          for (trial_value in trailing_results) {
-            if (inherits(trial_value, "try-error") || is.null(trial_value)) {
-              stop(
-                paste(
-                  "Preliminary trial failed for k =", target_clusters,
-                  "phase =", phase_label,
-                  "iteration =", iteration_idx
-                )
-              )
-            }
-            trial_pair <- unpack_trial_counts(
-              trial_value,
-              trial_idx_for_error = NA_integer_
-            )
-            n_clusters <- as.integer(trial_pair[["effective"]])
-            raw_clusters <- as.integer(trial_pair[["raw"]])
-            trial_counts <- c(trial_counts, n_clusters)
-            raw_trial_counts <- c(raw_trial_counts, raw_clusters)
-            completed_trials <- completed_trials + 1L
-          }
-          active_jobs <- list()
-          active_job_trials <- list()
-          active_job_started <- list()
-        }
-      }
-      
-      if (length(trial_counts) == 0L) {
+      if (length(trial_counts) == 0L ||
+          anyNA(trial_counts) ||
+          anyNA(raw_trial_counts)) {
         stop(
           paste(
             "No preliminary trial results for k =", target_clusters,
@@ -1759,53 +1905,37 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
         )
       }
       
-      n_clusters_obtained <- if (early_stop) {
-        as.numeric(target_clusters)
-      } else {
-        as.numeric(stats::median(trial_counts))
-      }
-      raw_clusters_obtained <- if (length(raw_trial_counts) == 0L) {
-        n_clusters_obtained
-      } else {
-        as.numeric(stats::median(raw_trial_counts))
-      }
+      n_clusters_obtained <- as.numeric(stats::median(trial_counts))
+      raw_clusters_obtained <- as.numeric(stats::median(raw_trial_counts))
       elapsed_seconds <- as.numeric(difftime(Sys.time(), step_start_time, units = "secs"))
       
       if (verbose) {
-        if (early_stop) {
-          scice_message(
-            paste(
-              "RESOLUTION_SEARCH: k =", target_clusters,
-              phase_label, "step", iteration_idx,
-              "- gamma =", signif(gamma_val, 6),
-              "- early stop at trial", early_trial_idx, "/", n_preliminary_trials,
-              "(completed", completed_trials,
-              "killed", killed_trials,
-              "elapsed", round(elapsed_seconds, 3), "s)"
-            )
+        search_state <- classify_resolution_search_state(
+          raw_cluster_median = raw_clusters_obtained,
+          effective_cluster_median = n_clusters_obtained,
+          target_clusters = target_clusters,
+          min_cluster_size = min_cluster_size
+        )
+        scice_message(
+          paste(
+            "RESOLUTION_SEARCH: k =", target_clusters,
+            phase_label, "step", iteration_idx,
+            "- representative preliminary evaluation completed",
+            "(", n_preliminary_trials, "/", n_preliminary_trials, ")",
+            "- median effective clusters =", signif(n_clusters_obtained, 6),
+            "- median raw clusters =", signif(raw_clusters_obtained, 6),
+            "- raw class =", search_state$raw_class,
+            "- over_fragmented =", search_state$over_fragmented,
+            "- elapsed", round(elapsed_seconds, 3), "s"
           )
-        } else {
-          scice_message(
-            paste(
-              "RESOLUTION_SEARCH: k =", target_clusters,
-              phase_label, "step", iteration_idx,
-              "- all trials completed",
-              "(completed", completed_trials, "/", n_preliminary_trials, ")",
-              "- median fallback effective clusters =", signif(n_clusters_obtained, 6),
-              "- median fallback raw clusters =", signif(raw_clusters_obtained, 6),
-              "- elapsed", round(elapsed_seconds, 3), "s"
-            )
-          )
-        }
+        )
       }
       
       list(
         n_clusters_obtained = n_clusters_obtained,
         raw_clusters_obtained = raw_clusters_obtained,
-        early_stop = early_stop,
-        completed_trials = completed_trials,
-        killed_trials = killed_trials,
-        launched_trials = launched_trials
+        completed_trials = n_preliminary_trials,
+        elapsed_seconds = elapsed_seconds
       )
     }
 
@@ -1851,14 +1981,14 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
       
       n_clusters_obtained <- cluster_results$n_clusters_obtained
       raw_clusters_obtained <- cluster_results$raw_clusters_obtained
+      search_state <- classify_resolution_search_state(
+        raw_cluster_median = raw_clusters_obtained,
+        effective_cluster_median = n_clusters_obtained,
+        target_clusters = target_clusters,
+        min_cluster_size = min_cluster_size
+      )
       trial_steps <- trial_steps + 1L
-      if (cluster_results$early_stop) {
-        early_stop_count <- early_stop_count + 1L
-        early_stop_saved_trials <- early_stop_saved_trials +
-          max(0L, as.integer(n_preliminary_trials - cluster_results$completed_trials))
-      } else {
-        fallback_count <- fallback_count + 1L
-      }
+      total_preliminary_elapsed <- total_preliminary_elapsed + cluster_results$elapsed_seconds
       if (verbose && (iteration_count == 1 || iteration_count %% 5 == 0)) {
         interval_span <- if (objective_function == "modularity") {
           abs(right - left)
@@ -1872,18 +2002,16 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
             "- gamma =", signif(gamma_val, 6),
             "- median effective clusters =", n_clusters_obtained,
             "- median raw clusters =", raw_clusters_obtained,
+            "- raw class =", search_state$raw_class,
+            "- over_fragmented =", search_state$over_fragmented,
             "- interval span =", signif(interval_span, 6)
           )
         )
       }
       
-      if (n_clusters_obtained >= target_clusters) {
-        right <- mid
-      } else if (raw_clusters_obtained < target_clusters) {
+      if (identical(search_state$lower_action, "increase_gamma")) {
         left <- mid
       } else {
-        # Over-fragmented regime: raw clusters are high but effective clusters drop
-        # below target due min_cluster_size filtering; move to lower gamma.
         right <- mid
       }
     }
@@ -1931,14 +2059,14 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
       
       n_clusters_obtained <- cluster_results$n_clusters_obtained
       raw_clusters_obtained <- cluster_results$raw_clusters_obtained
+      search_state <- classify_resolution_search_state(
+        raw_cluster_median = raw_clusters_obtained,
+        effective_cluster_median = n_clusters_obtained,
+        target_clusters = target_clusters,
+        min_cluster_size = min_cluster_size
+      )
       trial_steps <- trial_steps + 1L
-      if (cluster_results$early_stop) {
-        early_stop_count <- early_stop_count + 1L
-        early_stop_saved_trials <- early_stop_saved_trials +
-          max(0L, as.integer(n_preliminary_trials - cluster_results$completed_trials))
-      } else {
-        fallback_count <- fallback_count + 1L
-      }
+      total_preliminary_elapsed <- total_preliminary_elapsed + cluster_results$elapsed_seconds
       if (verbose && (iteration_count == 1 || iteration_count %% 5 == 0)) {
         interval_span <- if (objective_function == "modularity") {
           abs(right - left)
@@ -1952,57 +2080,38 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
             "- gamma =", signif(gamma_val, 6),
             "- median effective clusters =", n_clusters_obtained,
             "- median raw clusters =", raw_clusters_obtained,
+            "- raw class =", search_state$raw_class,
+            "- over_fragmented =", search_state$over_fragmented,
             "- interval span =", signif(interval_span, 6)
           )
         )
       }
       
-      if (n_clusters_obtained >= target_clusters) {
-        left <- mid
-      } else if (raw_clusters_obtained < target_clusters) {
+      if (identical(search_state$upper_action, "increase_gamma")) {
         left <- mid
       } else {
-        # Over-fragmented regime: avoid drifting into all-small/high-gamma region.
         right <- mid
       }
     }
     
     right_bound <- left
     
-    if (verbose) {
-      display_left <- if (objective_function == "CPM") exp(left_bound) else left_bound
-      display_right <- if (objective_function == "CPM") exp(right_bound) else right_bound
-      scice_message(
-        paste0(
-          "RESOLUTION_SEARCH: k = ", target_clusters,
-          " - bounds identified [", signif(display_left, 6), ", ", signif(display_right, 6), "]"
-        )
-      )
-      avg_saved_trials <- if (early_stop_count > 0L) {
-        round(early_stop_saved_trials / early_stop_count, 2)
-      } else {
-        0
-      }
-      scice_message(
-        paste(
-          "RESOLUTION_SEARCH: k =", target_clusters,
-          "trial summary - early stops:", early_stop_count, "/", trial_steps,
-          "- median fallbacks:", fallback_count,
-          "- avg trials saved when early stop:", avg_saved_trials
-        )
-      )
-    }
-    
     # If bounds are identical or invalid, create a cluster-specific range
     if (identical(left_bound, right_bound) || is.na(left_bound) || is.na(right_bound)) {
       if (objective_function == "CPM") {
-        # For CPM, create a range around the found value with cluster-specific adjustment
-        center_val <- ifelse(is.na(left_bound), exp((start_g + end_g) / 2), left_bound)
-        # Add cluster-specific offset to ensure different ranges for different cluster numbers
-        cluster_offset <- (target_clusters - min(cluster_range)) * 0.05  # Small offset based on cluster number
-        adjusted_center <- center_val * (1 + cluster_offset)
-        left_bound <- max(exp(start_g), adjusted_center * 0.7)
-        right_bound <- min(exp(end_g), adjusted_center * 1.3)
+        # CPM searches in log-gamma space, so convert through gamma scale before
+        # widening an exact/degenerate interval.
+        center_gamma <- if (is.na(left_bound)) {
+          exp((start_g + end_g) / 2)
+        } else {
+          exp(left_bound)
+        }
+        # When an exact CPM bound is already identified, keep the widened fallback
+        # centered on that bound instead of shifting by cluster number.
+        left_gamma <- max(exp(start_g), center_gamma * 0.7)
+        right_gamma <- min(exp(end_g), center_gamma * 1.3)
+        left_bound <- log(left_gamma)
+        right_bound <- log(right_gamma)
       } else {
         # For modularity, create a range around the found value with cluster-specific adjustment
         center_val <- ifelse(is.na(left_bound), (start_g + end_g) / 2, left_bound)
@@ -2013,12 +2122,120 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
         right_bound <- min(end_g, adjusted_center + 0.15)
       }
     }
+
+    coarse_gamma_range <- sort(
+      if (objective_function == "CPM") {
+        exp(c(left_bound, right_bound))
+      } else {
+        c(left_bound, right_bound)
+      }
+    )
+    final_gamma_range <- coarse_gamma_range
+    plateau_clamp_mode <- "coarse"
+    plateau_probe_indices <- integer(0)
+
+    if (min_cluster_size > 1L && all(is.finite(coarse_gamma_range))) {
+      probe_gamma_sequence <- build_gamma_sequence_for_range(
+        coarse_gamma_range,
+        objective_function = objective_function,
+        resolution_tolerance = resolution_tolerance,
+        n_vertices = igraph::vcount(igraph_obj)
+      )
+      probe_raw_medians <- numeric(length(probe_gamma_sequence))
+
+      for (probe_idx in seq_along(probe_gamma_sequence)) {
+        plateau_seed <- NULL
+        if (!is.null(seed)) {
+          plateau_seed <- as.integer(
+            (as.double(seed) + target_clusters * 10 + 1000 + probe_idx) %% .Machine$integer.max
+          )
+          if (is.na(plateau_seed) || plateau_seed <= 0L) {
+            plateau_seed <- 1L
+          }
+        }
+        probe_result <- run_preliminary_trials(
+          probe_gamma_sequence[[probe_idx]],
+          cache_suffix_base = paste("res_search_clamp", target_clusters, sep = "_"),
+          seed_base = plateau_seed,
+          phase_label = "clamp",
+          iteration_idx = probe_idx
+        )
+        trial_steps <- trial_steps + 1L
+        total_preliminary_elapsed <- total_preliminary_elapsed + probe_result$elapsed_seconds
+        probe_raw_medians[[probe_idx]] <- probe_result$raw_clusters_obtained
+      }
+
+      clamp_result <- clamp_gamma_range_to_raw_plateau(
+        probe_gamma_sequence,
+        probe_raw_medians,
+        target_clusters = target_clusters
+      )
+      final_gamma_range <- sort(as.numeric(clamp_result$bounds))
+      plateau_clamp_mode <- clamp_result$mode
+      plateau_probe_indices <- as.integer(clamp_result$indices)
+    }
+
+    if (verbose) {
+      scice_message(
+        paste0(
+          "RESOLUTION_SEARCH: k = ", target_clusters,
+          " - coarse bounds [", signif(coarse_gamma_range[1], 6), ", ", signif(coarse_gamma_range[2], 6), "]"
+        )
+      )
+      if (min_cluster_size > 1L) {
+        scice_message(
+          paste0(
+            "RESOLUTION_SEARCH: k = ", target_clusters,
+            " - plateau clamp mode = ", plateau_clamp_mode,
+            " -> final bounds [", signif(final_gamma_range[1], 6), ", ", signif(final_gamma_range[2], 6), "]"
+          )
+        )
+        if (!is.null(clamp_result$stabilized_raw_medians) &&
+            !isTRUE(all.equal(
+              as.numeric(probe_raw_medians),
+              as.numeric(clamp_result$stabilized_raw_medians),
+              tolerance = 0
+            ))) {
+          scice_message(
+            paste(
+              "RESOLUTION_SEARCH: k =", target_clusters,
+              "- plateau clamp stabilized raw medians:",
+              paste(signif(as.numeric(clamp_result$stabilized_raw_medians), 6), collapse = ", ")
+            )
+          )
+        }
+        if (length(plateau_probe_indices) > 0L && plateau_clamp_mode != "coarse") {
+          scice_message(
+            paste(
+              "RESOLUTION_SEARCH: k =", target_clusters,
+              "- plateau clamp probe indices:",
+              paste(plateau_probe_indices, collapse = ", ")
+            )
+          )
+        }
+      } else {
+        scice_message(
+          paste0(
+            "RESOLUTION_SEARCH: k = ", target_clusters,
+            " - bounds identified [", signif(final_gamma_range[1], 6), ", ", signif(final_gamma_range[2], 6), "]"
+          )
+        )
+      }
+      scice_message(
+        paste(
+          "RESOLUTION_SEARCH: k =", target_clusters,
+          "trial summary - full preliminary trial sets:", trial_steps,
+          "- trials per step:", n_preliminary_trials,
+          "- cumulative preliminary elapsed:", round(total_preliminary_elapsed, 3), "s"
+        )
+      )
+    }
     
     # Return results as a data.table row
     data.table::data.table(
       cluster_number = target_clusters,
-      left_bound = if (objective_function == "CPM") exp(left_bound) else left_bound,
-      right_bound = if (objective_function == "CPM") exp(right_bound) else right_bound
+      left_bound = final_gamma_range[1],
+      right_bound = final_gamma_range[2]
     )
   }, mc.cores = active_cluster_workers)
   
@@ -2143,6 +2360,7 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
   }
   
   if (verbose) {
+    raw_guard_limits <- raw_cluster_guard_limits(target_clusters)
     scice_message(paste(worker_id, ": Optimization parameters:"))
     scice_message(paste(worker_id, ":   Target clusters:", target_clusters))
     scice_message(paste(worker_id, ":   Trials per gamma:", n_trials))
@@ -2157,6 +2375,12 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
       )
     )
     if (min_cluster_size > 1L) {
+      scice_message(
+        paste(
+          worker_id, ":   Raw-cluster guard: soft <=", raw_guard_limits$soft,
+          "hard <=", raw_guard_limits$hard
+        )
+      )
       scice_message(
         paste(
           worker_id, ":   Counting uses effective clusters (size >=", min_cluster_size,
@@ -2177,29 +2401,13 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
     scice_message(paste(worker_id, ": Gamma range bounds: [", signif(gamma_range[1], 6), ", ", signif(gamma_range[2], 6), "]", sep = ""))
   }
   
-  # Create gamma sequence using efficient sequence generation
-  gamma_sequence <- if (objective_function == "modularity") {
-    if (abs(gamma_range[2] - gamma_range[1]) > resolution_tolerance) {
-      seq(gamma_range[1], gamma_range[2], length.out = n_steps)
-    } else {
-      delta_g <- resolution_tolerance
-      seq(gamma_range[1] - delta_g, gamma_range[1] + delta_g, length.out = n_steps)
-    }
-  } else { # CPM
-    lower <- max(min(gamma_range), .Machine$double.xmin)
-    upper <- max(max(gamma_range), .Machine$double.xmin)
-    
-    if (!is.finite(lower) || !is.finite(upper)) {
-      stop("Invalid gamma_range: bounds must be finite.")
-    }
-    
-    if (abs(upper - lower) > max(resolution_tolerance, lower * 1e-6)) {
-      exp(seq(log(lower), log(upper), length.out = n_steps))
-    } else {
-      delta_log <- max(resolution_tolerance, 1e-4)
-      exp(seq(log(lower) - delta_log, log(lower) + delta_log, length.out = n_steps))
-    }
-  }
+  # Create gamma sequence using the same helper used by resolution-range plateau clamping.
+  gamma_sequence <- build_gamma_sequence_for_range(
+    gamma_range,
+    objective_function = objective_function,
+    resolution_tolerance = resolution_tolerance,
+    n_vertices = n_vertices
+  )
   
   if (verbose) {
     scice_message(paste(worker_id, ": Generated gamma sequence:"))
@@ -2225,12 +2433,23 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
     scice_message(paste(worker_id, ": Phase 1 - Testing", length(gamma_sequence), "gamma values with", n_trials, "trials each"))
     initial_phase_start <- Sys.time()
     if (in_parallel_context) {
-      scice_message(paste(worker_id, ": Running in parallel context - using 1 worker for nested operations"))
+      scice_message(
+        paste(
+          worker_id, ": Running in parallel context - deriving nested worker budget from",
+          n_workers, "optimizer workers across", length(gamma_sequence), "gamma values"
+        )
+      )
     }
   }
   
-  # In parallel context, n_workers is already the per-cluster budget.
-  nested_workers <- max(1L, as.integer(n_workers))
+  nested_workers <- if (in_parallel_context) {
+    max(
+      1L,
+      as.integer(round(as.double(n_workers) / as.double(max(1L, length(gamma_sequence)))))
+    )
+  } else {
+    max(1L, as.integer(n_workers))
+  }
   if (!in_parallel_context) {
     nested_workers <- min(nested_workers, max(1L, as.integer(length(gamma_sequence))))
   }
@@ -2292,7 +2511,7 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
       })
     }
 
-    n_clusters_vec <- vapply(
+    effective_clusters_vec <- vapply(
       seq_len(n_trials),
       function(trial_idx) {
         count_effective_clusters(
@@ -2302,16 +2521,43 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
       },
       integer(1)
     )
-    median_clusters_raw <- stats::median(n_clusters_vec)
-    median_clusters_int <- as.integer(median_clusters_raw)
-    hit_trials <- which(n_clusters_vec == target_clusters)
+    raw_clusters_vec <- vapply(
+      seq_len(n_trials),
+      function(trial_idx) {
+        as.integer(length(unique(cluster_matrix[, trial_idx])))
+      },
+      integer(1)
+    )
+    median_effective_clusters <- stats::median(effective_clusters_vec)
+    median_clusters_int <- as.integer(median_effective_clusters)
+    raw_cluster_median <- stats::median(raw_clusters_vec)
+    raw_cluster_median_int <- as.integer(raw_cluster_median)
+    hit_trials <- which(effective_clusters_vec == target_clusters)
     hit_count <- as.integer(length(hit_trials))
+    raw_hit_trials <- which(raw_clusters_vec == target_clusters)
+    raw_hit_count <- as.integer(length(raw_hit_trials))
     hit_rate <- as.double(hit_count) / as.double(n_trials)
-    median_gap <- abs(median_clusters_raw - target_clusters)
+    median_gap <- abs(median_effective_clusters - target_clusters)
+    raw_median_gap <- abs(raw_cluster_median - target_clusters)
     within_median_window <- (median_gap <= 1)
     strict_valid <- (median_clusters_int == target_clusters)
     relaxed_valid <- (hit_count >= 1L) && within_median_window
-    gamma_admitted <- strict_valid || relaxed_valid
+    raw_within_median_window <- (raw_median_gap <= 1)
+    raw_strict_valid <- (raw_cluster_median_int == target_clusters)
+    raw_relaxed_valid <- (raw_hit_count >= 1L) && raw_within_median_window
+    raw_guard_soft <- passes_raw_cluster_guard(
+      raw_cluster_median,
+      target_clusters,
+      min_cluster_size = min_cluster_size,
+      level = "soft"
+    )
+    raw_guard_hard <- passes_raw_cluster_guard(
+      raw_cluster_median,
+      target_clusters,
+      min_cluster_size = min_cluster_size,
+      level = "hard"
+    )
+    gamma_admitted <- strict_valid || relaxed_valid || raw_strict_valid || raw_relaxed_valid
 
     if (!gamma_admitted) {
       rm(cluster_matrix)
@@ -2321,12 +2567,18 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
           paste(
             worker_id, ": Phase 1 progress gamma", gamma_idx, "/", length(gamma_sequence),
             "completed in", round(gamma_elapsed, 3), "seconds",
-            "- median_raw =", signif(median_clusters_raw, 6),
+            "- median_effective =", signif(median_effective_clusters, 6),
             "- median_int =", median_clusters_int,
+            "- median_raw =", signif(raw_cluster_median, 6),
             "- median gap =", round(median_gap, 3),
             "- hit trials =", hit_count, "/", n_trials,
+            "- raw hit trials =", raw_hit_count, "/", n_trials,
             "- strict_valid =", strict_valid,
             "- relaxed_valid =", relaxed_valid,
+            "- raw_strict_valid =", raw_strict_valid,
+            "- raw_relaxed_valid =", raw_relaxed_valid,
+            "- raw_guard_soft =", raw_guard_soft,
+            "- raw_guard_hard =", raw_guard_hard,
             "(target =", target_clusters, "; IC skipped)"
           )
         )
@@ -2334,15 +2586,26 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
       return(list(
         valid = FALSE,
         gamma = gamma_val,
-        mean_clusters = median_clusters_raw,
-        median_clusters_raw = median_clusters_raw,
+        mean_clusters = median_effective_clusters,
+        median_clusters_raw = median_effective_clusters,
+        median_effective_clusters = median_effective_clusters,
         median_clusters_int = median_clusters_int,
+        raw_cluster_median = raw_cluster_median,
+        raw_cluster_median_int = raw_cluster_median_int,
         median_gap = median_gap,
+        raw_median_gap = raw_median_gap,
         within_median_window = within_median_window,
         strict_valid = strict_valid,
         relaxed_valid = relaxed_valid,
+        raw_within_median_window = raw_within_median_window,
+        raw_strict_valid = raw_strict_valid,
+        raw_relaxed_valid = raw_relaxed_valid,
         hit_count = hit_count,
-        hit_rate = hit_rate
+        hit_rate = hit_rate,
+        effective_hit_count = hit_count,
+        raw_hit_count = raw_hit_count,
+        raw_guard_soft = raw_guard_soft,
+        raw_guard_hard = raw_guard_hard
       ))
     }
 
@@ -2364,12 +2627,18 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
         paste(
           worker_id, ": Phase 1 progress gamma", gamma_idx, "/", length(gamma_sequence),
           "completed in", round(gamma_elapsed, 3), "seconds",
-          "- median_raw =", signif(median_clusters_raw, 6),
+          "- median_effective =", signif(median_effective_clusters, 6),
           "- median_int =", median_clusters_int,
+          "- median_raw =", signif(raw_cluster_median, 6),
           "- median gap =", round(median_gap, 3),
           "- hit trials =", hit_count, "/", n_trials,
+          "- raw hit trials =", raw_hit_count, "/", n_trials,
           "- strict_valid =", strict_valid,
           "- relaxed_valid =", relaxed_valid,
+          "- raw_strict_valid =", raw_strict_valid,
+          "- raw_relaxed_valid =", raw_relaxed_valid,
+          "- raw_guard_soft =", raw_guard_soft,
+          "- raw_guard_hard =", raw_guard_hard,
           "- IC (all trials) =", round(ic_score, 4)
         )
       )
@@ -2378,15 +2647,26 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
     list(
       valid = TRUE,
       gamma = gamma_val,
-      mean_clusters = median_clusters_raw,
-      median_clusters_raw = median_clusters_raw,
+      mean_clusters = median_effective_clusters,
+      median_clusters_raw = median_effective_clusters,
+      median_effective_clusters = median_effective_clusters,
       median_clusters_int = median_clusters_int,
+      raw_cluster_median = raw_cluster_median,
+      raw_cluster_median_int = raw_cluster_median_int,
       median_gap = median_gap,
+      raw_median_gap = raw_median_gap,
       within_median_window = within_median_window,
       strict_valid = strict_valid,
       relaxed_valid = relaxed_valid,
+      raw_within_median_window = raw_within_median_window,
+      raw_strict_valid = raw_strict_valid,
+      raw_relaxed_valid = raw_relaxed_valid,
       hit_count = hit_count,
       hit_rate = hit_rate,
+      effective_hit_count = hit_count,
+      raw_hit_count = raw_hit_count,
+      raw_guard_soft = raw_guard_soft,
+      raw_guard_hard = raw_guard_hard,
       ic = ic_score,
       matrix_ref = matrix_ref
     )
@@ -2414,6 +2694,9 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
   mean_clusters <- vapply(
     gamma_results,
     function(x) {
+      if (!is.null(x$median_effective_clusters)) {
+        return(as.numeric(x$median_effective_clusters))
+      }
       if (!is.null(x$median_clusters_raw)) {
         return(as.numeric(x$median_clusters_raw))
       }
@@ -2434,6 +2717,9 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
   hit_counts <- vapply(
     gamma_results,
     function(x) {
+      if (!is.null(x$effective_hit_count)) {
+        return(as.integer(x$effective_hit_count))
+      }
       if (is.null(x$hit_count)) {
         return(0L)
       }
@@ -2456,7 +2742,36 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
     function(x) isTRUE(x$relaxed_valid),
     logical(1)
   )
-  valid_flags <- strict_flags | relaxed_flags
+  raw_strict_flags <- vapply(
+    gamma_results,
+    function(x) isTRUE(x$raw_strict_valid),
+    logical(1)
+  )
+  raw_relaxed_flags <- vapply(
+    gamma_results,
+    function(x) isTRUE(x$raw_relaxed_valid),
+    logical(1)
+  )
+  soft_raw_guard_flags <- vapply(
+    gamma_results,
+    function(x) {
+      if (is.null(x$raw_guard_soft)) {
+        return(TRUE)
+      }
+      isTRUE(x$raw_guard_soft)
+    },
+    logical(1)
+  )
+  hard_raw_guard_flags <- vapply(
+    gamma_results,
+    function(x) {
+      if (is.null(x$raw_guard_hard)) {
+        return(TRUE)
+      }
+      isTRUE(x$raw_guard_hard)
+    },
+    logical(1)
+  )
   
   if (verbose) {
     scice_message(paste(worker_id, ": Phase 2 - Filtering for target effective cluster count (strict-first with relaxed fallback):", target_clusters))
@@ -2490,15 +2805,39 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
         sum(relaxed_flags), "/", length(gamma_results)
       )
     )
-    admitted_count <- sum(valid_flags)
     scice_message(
       paste(
-        worker_id, ":   admitted gammas (strict or relaxed):",
+        worker_id, ":   raw-strict-valid gammas (as.integer(raw_median)==target):",
+        sum(raw_strict_flags), "/", length(gamma_results)
+      )
+    )
+    scice_message(
+      paste(
+        worker_id, ":   raw-relaxed-valid gammas (raw any-hit + |raw_median-target|<=1):",
+        sum(raw_relaxed_flags), "/", length(gamma_results)
+      )
+    )
+    scice_message(
+      paste(
+        worker_id, ":   gammas passing soft raw-cluster guard:",
+        sum(soft_raw_guard_flags), "/", length(gamma_results)
+      )
+    )
+    scice_message(
+      paste(
+        worker_id, ":   gammas passing hard raw-cluster guard:",
+        sum(hard_raw_guard_flags), "/", length(gamma_results)
+      )
+    )
+    admitted_count <- sum((strict_flags | relaxed_flags) & hard_raw_guard_flags)
+    scice_message(
+      paste(
+        worker_id, ":   raw-guarded admitted gammas (strict or relaxed):",
         admitted_count, "/", length(gamma_results)
       )
     )
     if (admitted_count > 0) {
-      admitted_hit_counts <- table(hit_counts[valid_flags])
+      admitted_hit_counts <- table(hit_counts[(strict_flags | relaxed_flags) & hard_raw_guard_flags])
       for (i in 1:length(admitted_hit_counts)) {
         hit_val <- names(admitted_hit_counts)[i]
         freq <- admitted_hit_counts[i]
@@ -2508,17 +2847,52 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
   }
   
   # Phase 2 admission decision:
-  # 1) Prefer strict-valid set (old compatibility rule)
-  # 2) If strict set empty, fallback to relaxed-valid set.
-  strict_indices <- which(strict_flags)
-  relaxed_indices <- which(relaxed_flags)
-  admission_mode <- NULL
-  if (length(strict_indices) > 0) {
-    valid_indices <- strict_indices
-    admission_mode <- "strict"
-  } else {
-    valid_indices <- relaxed_indices
-    admission_mode <- "relaxed"
+  # 1) raw_strict_soft
+  # 2) strict_soft
+  # 3) relaxed_soft
+  # 4) strict_hard
+  # 5) relaxed_hard
+  # 6) relaxed_unguarded
+  # 7) raw_relaxed_soft
+  # 8) raw_relaxed_hard
+  # 9) raw_relaxed_unguarded
+  admission_decision <- select_gamma_admission(
+    strict_flags = strict_flags,
+    relaxed_flags = relaxed_flags,
+    soft_guard_flags = soft_raw_guard_flags,
+    hard_guard_flags = hard_raw_guard_flags,
+    raw_strict_flags = raw_strict_flags,
+    raw_relaxed_flags = raw_relaxed_flags
+  )
+  valid_indices <- admission_decision$indices
+  admission_mode <- admission_decision$mode
+  pre_refine_candidate_count <- length(valid_indices)
+
+  refined_candidates <- refine_gamma_candidates_by_raw_gap(
+    valid_indices = valid_indices,
+    admission_mode = admission_mode,
+    gamma_results = gamma_results,
+    target_clusters = target_clusters,
+    min_cluster_size = min_cluster_size
+  )
+  valid_indices <- refined_candidates$indices
+  admission_mode <- refined_candidates$mode
+  selected_raw_gaps <- refined_candidates$raw_gaps
+  best_raw_gap <- refined_candidates$best_raw_gap
+
+  if (length(valid_indices) > 0L &&
+      length(valid_indices) < pre_refine_candidate_count &&
+      min_cluster_size > 1L &&
+      any(is.finite(selected_raw_gaps))) {
+    if (verbose) {
+      scice_message(
+        paste(
+          worker_id, ": Phase 2 refinement - retaining",
+          length(valid_indices), "candidate gammas with minimum raw-cluster gap",
+          signif(best_raw_gap, 6), "to target", target_clusters
+        )
+      )
+    }
   }
   
   if (length(valid_indices) == 0) {
@@ -2526,7 +2900,7 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
       scice_message(
         paste(
           worker_id,
-          ": ERROR - No gammas satisfied strict admission and none satisfied relaxed fallback admission for effective cluster count",
+          ": ERROR - No gammas satisfied raw-guarded strict/relaxed admission, unguarded relaxed fallback, or bounded raw-count fallback admission for effective cluster count",
           target_clusters
         )
       )
@@ -2535,19 +2909,18 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
   }
   
   if (verbose) {
-    if (identical(admission_mode, "strict")) {
-      scice_message(
-        paste(
-          worker_id, ": Phase 2 decision - strict matches found; using strict-only candidate set."
-        )
-      )
-    } else {
-      scice_message(
-        paste(
-          worker_id, ": Phase 2 decision - no strict matches; falling back to relaxed candidate set."
-        )
-      )
-    }
+    admission_messages <- c(
+      raw_strict_soft = "soft-guarded raw-count exact family exists; using raw_strict_soft candidate set before effective families.",
+      strict_soft = "no soft-guarded raw-count exact family; using bounded strict effective-match candidate set.",
+      relaxed_soft = "no soft-guarded strict matches; using soft-guarded relaxed candidate set.",
+      strict_hard = "no soft-guarded candidates; using hard-guarded strict candidate set.",
+      relaxed_hard = "no soft-guarded strict candidates; using hard-guarded relaxed candidate set.",
+      relaxed_unguarded = "no raw-guarded candidates; falling back to unguarded relaxed candidate set.",
+      raw_relaxed_soft = "no effective candidates; using soft-guarded raw-count relaxed fallback candidate set.",
+      raw_relaxed_hard = "no strict effective candidates; using hard-guarded raw-count relaxed fallback candidate set.",
+      raw_relaxed_unguarded = "no raw-guarded effective candidates; falling back to unguarded raw-count relaxed candidate set."
+    )
+    scice_message(paste(worker_id, ": Phase 2 decision -", admission_messages[[admission_mode]]))
     scice_message(
       paste(
         worker_id, ": Found", length(valid_indices),
@@ -2561,6 +2934,16 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
   gamma_sequence <- vapply(valid_results, function(x) x$gamma, numeric(1))
   ic_scores <- vapply(valid_results, function(x) x$ic, numeric(1))
   clustering_refs <- lapply(valid_results, function(x) x$matrix_ref)
+  effective_cluster_medians <- vapply(
+    valid_results,
+    function(x) as.numeric(x$median_effective_clusters),
+    numeric(1)
+  )
+  raw_cluster_medians <- vapply(
+    valid_results,
+    function(x) as.numeric(x$raw_cluster_median),
+    numeric(1)
+  )
   rm(gamma_results, valid_results)
   
   if (verbose) {
@@ -2755,6 +3138,9 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
   }
 
   best_clustering <- load_cluster_matrix(best_ref)
+  best_gamma_diag_index <- which.min(abs(gamma_sequence - best_gamma))
+  selected_effective_cluster_median <- effective_cluster_medians[[best_gamma_diag_index]]
+  selected_raw_cluster_median <- raw_cluster_medians[[best_gamma_diag_index]]
   
   # Bootstrap analysis
   if (verbose) {
@@ -2830,19 +3216,40 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
     scice_message(paste(worker_id, ": OPTIMIZATION COMPLETE"))
   }
   
-  # Extract best labels: raw best trial first, then optional final merge only once.
+  # Extract raw best labels for diagnostics, then merge the final user-facing
+  # best_labels so min_cluster_size affects the returned clustering.
   extracted_best <- extract_clustering_array(best_clustering)
   best_labels_raw <- get_best_clustering(extracted_best)
-  best_labels <- merge_small_clusters_to_neighbors(
-    best_labels_raw,
-    snn_graph = snn_graph,
-    min_cluster_size = min_cluster_size
-  )
+  best_labels <- if (min_cluster_size > 1L) {
+    merge_small_clusters_to_neighbors(
+      labels = best_labels_raw,
+      snn_graph = snn_graph,
+      min_cluster_size = min_cluster_size
+    )
+  } else {
+    best_labels_raw
+  }
+  best_labels_raw_cluster_count <- as.integer(length(unique(best_labels_raw)))
+  best_labels_final_cluster_count <- as.integer(length(unique(best_labels)))
   if (verbose && min_cluster_size > 1L) {
     scice_message(
       paste(
-        worker_id, ": Final best_labels merge applied once with min_cluster_size =",
-        min_cluster_size
+        worker_id, ": Final best_labels merged small clusters to satisfy min_cluster_size (value =",
+        min_cluster_size,
+        "; final clusters =",
+        best_labels_final_cluster_count, ")"
+      )
+    )
+  }
+  if (verbose) {
+    scice_message(
+      paste(
+        worker_id, ": Selected diagnostics - gamma =", signif(best_gamma, 6),
+        "- effective_median =", signif(selected_effective_cluster_median, 6),
+        "- raw_median =", signif(selected_raw_cluster_median, 6),
+        "- admission_mode =", admission_mode,
+        "- best_labels_raw_clusters =", best_labels_raw_cluster_count,
+        "- best_labels_final_clusters =", best_labels_final_cluster_count
       )
     )
   }
@@ -2855,6 +3262,10 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
     ic_median = ic_median,
     ic_bootstrap = ic_bootstrap,
     best_labels = best_labels,
+    effective_cluster_median = selected_effective_cluster_median,
+    raw_cluster_median = selected_raw_cluster_median,
+    admission_mode = admission_mode,
+    best_labels_raw_cluster_count = best_labels_raw_cluster_count,
     n_iterations = k,
     k = k
   ))

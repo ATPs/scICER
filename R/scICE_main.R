@@ -47,8 +47,9 @@ NULL
 #' @param min_cluster_size Minimum number of cells required per cluster. Clusters
 #'   smaller than this threshold are excluded from target-cluster counting during
 #'   resolution search and optimization. IC/MEI are always computed from raw
-#'   (unmerged) trial labels. A single final merge is applied only to
-#'   \code{best_labels}. Set to \code{1} to disable this behavior.
+#'   (unmerged) trial labels, while the final \code{best_labels} are merged so
+#'   undersized clusters are not returned as separate output groups. Set to
+#'   \code{1} to disable effective-cluster matching and final best-label merge.
 #'   Default: \code{2}, matching Seurat singleton behavior.
 #' @param resolution_tolerance Tolerance for resolution parameter search (default: 1e-8)
 #' @param verbose Whether to print progress messages (default: TRUE)
@@ -60,11 +61,15 @@ NULL
 #'   \item{ic}{Inconsistency scores for each cluster number}
 #'   \item{ic_vec}{Bootstrap IC distributions}
 #'   \item{n_cluster}{Number of clusters tested}
-#'   \item{best_labels}{Final best labels (single post-optimization merge applied when \code{min_cluster_size > 1})}
+#'   \item{best_labels}{Final best labels after applying the \code{min_cluster_size} merge rule}
+#'   \item{effective_cluster_median}{Median effective cluster count at the selected gamma}
+#'   \item{raw_cluster_median}{Median raw cluster count at the selected gamma}
+#'   \item{admission_mode}{Phase-2 admission family used for the selected gamma}
+#'   \item{best_labels_raw_cluster_count}{Raw cluster count of the selected best trial before final merge}
 #'   \item{n_iter}{Number of iterations used}
 #'   \item{mei}{Mutual Element-wise Information scores}
 #'   \item{consistent_clusters}{Cluster numbers meeting consistency threshold}
-#'   \item{min_cluster_size}{Minimum cluster size used for effective-count matching and final best-label merge}
+#'   \item{min_cluster_size}{Minimum cluster size used for effective-count matching}
 #' }
 #'
 #' @examples
@@ -185,7 +190,7 @@ scICE_clustering <- function(object,
     scice_message(paste("  Remove threshold:", remove_threshold))
     scice_message(paste("  Minimum cluster size:", min_cluster_size))
     if (min_cluster_size > 1L) {
-      scice_message("  min_cluster_size semantics: counting uses effective clusters; final merge is applied only on best_labels")
+      scice_message("  min_cluster_size semantics: counting uses effective clusters; final best_labels are merged")
     }
     scice_message(paste("  Resolution tolerance:", resolution_tolerance))
     scice_message(paste(rep("-", 80), collapse = ""))
@@ -304,6 +309,10 @@ scICE_clustering <- function(object,
     scice_message(paste("    - labels length:", length(results$labels)))
     scice_message(paste("    - ic length:", length(results$ic)))
     scice_message(paste("    - n_cluster length:", length(results$n_cluster)))
+    scice_message(paste("    - effective_cluster_median length:", length(results$effective_cluster_median)))
+    scice_message(paste("    - raw_cluster_median length:", length(results$raw_cluster_median)))
+    scice_message(paste("    - admission_mode length:", length(results$admission_mode)))
+    scice_message(paste("    - best_labels_raw_cluster_count length:", length(results$best_labels_raw_cluster_count)))
     if (!is.null(results$excluded)) {
       scice_message(paste("    - excluded info available:", sum(results$excluded), "excluded clusters"))
     }
