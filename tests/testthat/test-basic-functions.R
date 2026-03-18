@@ -413,6 +413,107 @@ test_that("scICE_clustering validates min_cluster_size and preserves legacy mode
   )
 
   expect_equal(result$min_cluster_size, 1L)
+  expect_equal(result$analysis_mode, "cluster_range")
+  expect_null(result$resolution_input)
+  expect_null(result$resolution_diagnostics)
+  expect_true(is.finite(result$best_cluster))
+  expect_true(is.finite(result$best_resolution))
+})
+
+test_that("scICE_clustering supports manual resolution mode", {
+  data("pbmc_small", package = "SeuratObject")
+
+  result <- scICE_clustering(
+    object = pbmc_small,
+    graph_name = "RNA_snn",
+    resolution = c(0.2, 0.4),
+    n_workers = 1,
+    n_trials = 2,
+    n_bootstrap = 2,
+    seed = 123,
+    min_cluster_size = 1,
+    verbose = FALSE
+  )
+
+  expect_equal(result$analysis_mode, "resolution")
+  expect_equal(result$resolution_input, c(0.2, 0.4))
+  expect_true(is.data.frame(result$resolution_diagnostics))
+  expect_true(all(c(
+    "resolution", "cluster_number", "ic", "effective_cluster_median",
+    "raw_cluster_median", "best_labels_raw_cluster_count",
+    "best_labels_final_cluster_count", "n_iter", "selected"
+  ) %in% names(result$resolution_diagnostics)))
+  expect_equal(result$cluster_range_tested, result$n_cluster)
+  expect_true(all(result$gamma %in% result$resolution_input))
+  expect_true(is.finite(result$best_cluster))
+  expect_true(is.finite(result$best_resolution))
+
+  plot_obj <- plot_ic(result)
+  expect_s3_class(plot_obj, "ggplot")
+
+  labels_df <- get_robust_labels(result, threshold = Inf)
+  expect_true(is.data.frame(labels_df))
+  expect_gte(ncol(labels_df), 2L)
+})
+
+test_that("scICE_clustering manual resolution mode ignores cluster_range and deduplicates by best IC", {
+  data("pbmc_small", package = "SeuratObject")
+  n_cells <- ncol(pbmc_small)
+
+  build_mock_resolution_result <- function(resolution, final_clusters, ic_value) {
+    labels <- rep(seq_len(final_clusters) - 1L, length.out = n_cells)
+    list(
+      gamma = resolution,
+      labels = list(arr = list(as.integer(labels)), parr = 1),
+      ic_median = ic_value,
+      ic_bootstrap = c(ic_value, ic_value),
+      best_labels = as.integer(labels),
+      effective_cluster_median = as.numeric(final_clusters),
+      raw_cluster_median = as.numeric(final_clusters),
+      admission_mode = "manual_resolution",
+      best_labels_raw_cluster_count = as.integer(final_clusters),
+      best_labels_final_cluster_count = as.integer(final_clusters),
+      n_iterations = 10L,
+      k = 10L
+    )
+  }
+
+  local_mocked_bindings(
+    evaluate_fixed_resolution = function(igraph_obj, resolution, ...) {
+      if (isTRUE(all.equal(resolution, 0.1))) {
+        return(build_mock_resolution_result(0.1, 2L, 1.05))
+      }
+      if (isTRUE(all.equal(resolution, 0.2))) {
+        return(build_mock_resolution_result(0.2, 2L, 1.01))
+      }
+      build_mock_resolution_result(0.3, 3L, 1.02)
+    },
+    .package = "scICER"
+  )
+
+  expect_message(
+    result <- scICE_clustering(
+      object = pbmc_small,
+      graph_name = "RNA_snn",
+      cluster_range = 2:4,
+      resolution = c(0.1, 0.2, 0.3),
+      n_workers = 1,
+      n_trials = 1,
+      n_bootstrap = 2,
+      seed = 123,
+      min_cluster_size = 1,
+      verbose = FALSE
+    ),
+    "ignoring `cluster_range`"
+  )
+
+  expect_equal(result$analysis_mode, "resolution")
+  expect_equal(result$n_cluster, c(2L, 3L))
+  expect_equal(result$gamma, c(0.2, 0.3))
+  expect_equal(nrow(result$resolution_diagnostics), 3L)
+  expect_identical(result$resolution_diagnostics$selected, c(FALSE, TRUE, TRUE))
+  expect_equal(result$best_cluster, 2L)
+  expect_equal(result$best_resolution, 0.2)
 })
 
 test_that("scICE_clustering keeps raw best labels while storing min_cluster_size", {

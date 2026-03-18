@@ -20,7 +20,8 @@ scICE_clustering(
   remove_threshold = 1.15,
   min_cluster_size = 2,
   resolution_tolerance = 1e-08,
-  verbose = TRUE
+  verbose = TRUE,
+  resolution = NULL
 )
 }
 \arguments{
@@ -53,13 +54,21 @@ scICE_clustering(
 \item{min_cluster_size}{Minimum number of cells required per cluster. Clusters
 smaller than this threshold are excluded from target-cluster counting during
 resolution search and optimization. IC/MEI are always computed from raw
-(unmerged) trial labels. A single final merge is applied only to
-\code{best_labels}. Set to \code{1} to disable this behavior.
+(unmerged) trial labels, while the final \code{best_labels} are merged so
+undersized clusters are not returned as separate output groups. Set to
+\code{1} to disable effective-cluster matching and final best-label merge.
 Default: \code{2}, matching Seurat singleton behavior.}
 
 \item{resolution_tolerance}{Tolerance for resolution parameter search (default: 1e-8)}
 
 \item{verbose}{Whether to print progress messages (default: TRUE)}
+
+\item{resolution}{Optional manual Leiden resolution (gamma) value or vector.
+When provided, scICER skips \code{cluster_range}-based resolution search,
+evaluates the supplied gamma values directly, and keeps the lowest-IC
+solution for each final cluster number. If both \code{resolution} and
+\code{cluster_range} are provided, \code{cluster_range} is ignored with a
+user-facing message.}
 }
 \value{
 A list containing:
@@ -69,11 +78,20 @@ A list containing:
   \item{ic}{Inconsistency scores for each cluster number}
   \item{ic_vec}{Bootstrap IC distributions}
   \item{n_cluster}{Number of clusters tested}
-  \item{best_labels}{Final best labels (single post-optimization merge applied when \code{min_cluster_size > 1})}
+  \item{best_labels}{Final best labels after applying the \code{min_cluster_size} merge rule}
+  \item{effective_cluster_median}{Median effective cluster count at the selected gamma}
+  \item{raw_cluster_median}{Median raw cluster count at the selected gamma}
+  \item{admission_mode}{Phase-2 admission family used for the selected gamma}
+  \item{best_labels_raw_cluster_count}{Raw cluster count of the selected best trial before final merge}
   \item{n_iter}{Number of iterations used}
   \item{mei}{Mutual Element-wise Information scores}
   \item{consistent_clusters}{Cluster numbers meeting consistency threshold}
-  \item{min_cluster_size}{Minimum cluster size used for effective-count matching and final best-label merge}
+  \item{min_cluster_size}{Minimum cluster size used for effective-count matching}
+  \item{analysis_mode}{Whether the run used \code{"cluster_range"} or \code{"resolution"} mode}
+  \item{resolution_input}{Manual gamma values requested by the user (if any)}
+  \item{resolution_diagnostics}{Per-gamma evaluation summary for manual resolution mode}
+  \item{best_cluster}{Cluster number with the lowest IC score among returned results}
+  \item{best_resolution}{Gamma corresponding to \code{best_cluster}}
 }
 }
 \description{
@@ -114,6 +132,12 @@ plot_ic(scice_results)
 
 # Extract consistent clustering labels
 consistent_labels <- get_robust_labels(scice_results, threshold = 1.005)
+
+# Evaluate manually chosen gamma values
+scice_manual <- scICE_clustering(
+  pbmc_small,
+  resolution = c(0.2, 0.4, 0.8)
+)
 }
 
 }

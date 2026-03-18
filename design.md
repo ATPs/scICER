@@ -12,8 +12,9 @@ It covers:
 - runtime, parallelism, memory, and failure modes.
 
 This description matches the code on `main` after the raw-cluster-aware
-resolution search and gamma-admission updates on 2026-03-17, plus the
-`plot_ic()` gamma-label placement update on 2026-03-17.
+resolution search and gamma-admission updates on 2026-03-17, the
+`plot_ic()` gamma-label placement update on 2026-03-17, and the manual
+`resolution` mode update on 2026-03-17.
 
 ## 1.1 Visualization Note
 
@@ -29,11 +30,16 @@ resolution search and gamma-admission updates on 2026-03-17, plus the
 
 1. Validate inputs and initialize runtime context.
 2. Extract a Seurat graph and convert it to `igraph`.
-3. For each target cluster number `k`, run a raw-cluster-aware binary search to
-   find a coarse gamma range, then optionally clamp that range to a raw-cluster
-   plateau/bracket near the target.
-4. Optionally filter unstable `k` values.
-5. For each remaining `k`, run intensive optimization:
+3. Choose one of two entry modes:
+   - `cluster_range` mode: for each target cluster number `k`, run a
+     raw-cluster-aware binary search to find a coarse gamma range, then
+     optionally clamp that range to a raw-cluster plateau/bracket near the
+     target.
+   - `resolution` mode: skip gamma search entirely and evaluate the user’s
+     supplied gamma values directly.
+4. Optionally filter unstable `k` values in `cluster_range` mode.
+5. For each remaining target or manual gamma, run repeated Leiden trials and IC
+   scoring:
    - evaluate many gamma values,
    - collect both effective-cluster and raw-cluster medians across trials,
    - compute IC using all trials for any gamma admitted by the effective/raw
@@ -44,6 +50,10 @@ resolution search and gamma-admission updates on 2026-03-17, plus the
    - compute IC/MEI stability metrics,
    - select `best_labels`.
 6. Return an `scICE` object and annotate which `k` values are consistent under `ic_threshold`.
+
+In `resolution` mode, all requested gamma values are stored in
+`resolution_diagnostics`, but the main result object is deduplicated by final
+cluster number so each returned `n_cluster` keeps only the lowest-IC gamma.
 
 Important: current implementation uses **effective cluster counting** when `min_cluster_size > 1`.
 
@@ -78,7 +88,8 @@ scICE_clustering(
   remove_threshold = 1.15,
   min_cluster_size = 2,
   resolution_tolerance = 1e-8,
-  verbose = TRUE
+  verbose = TRUE,
+  resolution = NULL
 )
 ```
 
@@ -111,6 +122,21 @@ scICE_clustering(
   - larger range -> more total work,
   - each additional `k` adds another full search + optimization branch.
 - Practical note: this argument is not heavily validated (for positivity/ordering) in current code, so pass a clean integer vector.
+
+### 3.3.1 `resolution`
+
+- Meaning: manually supplied Leiden gamma value(s).
+- Type: single numeric value or numeric vector.
+- Priority: if `resolution` is provided, `cluster_range` is ignored and a user
+  message is emitted.
+- Used by:
+  - direct repeated Leiden evaluation for each supplied gamma,
+  - per-gamma IC/bootstrap diagnostics,
+  - per-final-cluster deduplication of the main result object.
+- Result behavior:
+  - `resolution_diagnostics` keeps one row per supplied gamma,
+  - the main `scICE` result keeps one row per final cluster number, selecting
+    the gamma with the lowest IC score for that cluster number.
 
 ### 3.4 `n_workers`
 
@@ -199,6 +225,8 @@ scICE_clustering(
 - Consequence:
   - lower threshold can exclude more `k` early (faster, but may remove viable targets),
   - `Inf` maximizes recall but may spend more compute downstream.
+- In `resolution` mode, this parameter is ignored because there is no
+  pre-optimization `cluster_range` filtering stage.
 
 ### 3.14 `min_cluster_size`
 
@@ -231,6 +259,7 @@ scICE_clustering(
 - Consequence:
   - smaller tolerance can increase search iterations,
   - too large may produce coarse bounds.
+- In `resolution` mode, this parameter is ignored because no gamma search is run.
 
 ### 3.16 `verbose`
 

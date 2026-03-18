@@ -122,6 +122,15 @@ scice_results <- scICE_clustering(
   verbose = TRUE
 )
 
+# Or evaluate manually chosen gamma values directly
+manual_results <- scICE_clustering(
+  object = seurat_obj,
+  resolution = c(0.2, 0.4, 0.8),
+  n_workers = n_workers,
+  min_cluster_size = 2,
+  verbose = TRUE
+)
+
 # For reproducible results, use the seed parameter
 scice_results <- scICE_clustering(
   object = seurat_obj,
@@ -209,8 +218,30 @@ results <- scICE_clustering(
 It's OK to set a large `remove_threshold` value, because `plot_ic` and `get_robust_labels` all have default `threshold = 1.005`.
 `min_cluster_size = 2` approximates Seurat singleton grouping; use `min_cluster_size = 1` to keep raw Leiden clusters.
 `labels` stay raw for IC/MEI, while `best_labels` receives one final merge pass when `min_cluster_size > 1`.
+`resolution` can be a single gamma or a vector of gamma values. When `resolution` is provided, scICER skips the `cluster_range` resolution search, evaluates the supplied gamma values directly, and keeps the lowest-IC result for each final cluster number. If both `resolution` and `cluster_range` are provided, `resolution` takes priority and `cluster_range` is ignored with an informational message.
 
-### 3. Visualization and Results
+### 3. Manual Resolution Mode
+
+```r
+# Directly evaluate user-chosen gamma values
+results_manual <- scICE_clustering(
+  object = your_seurat_object,
+  resolution = c(0.1, 0.2, 0.4, 0.8),
+  n_trials = 15,
+  n_bootstrap = 100,
+  min_cluster_size = 2,
+  seed = 42
+)
+
+# Per-gamma diagnostics
+results_manual$resolution_diagnostics
+
+# Lowest-IC returned solution
+results_manual$best_cluster
+results_manual$best_resolution
+```
+
+### 4. Visualization and Results
 
 ```r
 # Plot Inconsistency Coefficient (IC) scores
@@ -280,6 +311,11 @@ The `scICE_clustering()` function returns a list containing:
 - `best_labels`: Final best labels (single post-optimization merge when `min_cluster_size > 1`)
 - `consistent_clusters`: Cluster numbers meeting consistency threshold
 - `mei`: Mutual Element-wise Information scores
+- `analysis_mode`: `"cluster_range"` or `"resolution"`
+- `resolution_input`: Manual gamma values requested by the user in `resolution` mode
+- `resolution_diagnostics`: Per-gamma summary table in `resolution` mode
+- `best_cluster`: Returned cluster number with the lowest IC score
+- `best_resolution`: Gamma corresponding to `best_cluster`
 
 `scICE_clustering()` returns a lightweight results object and does not store the full
 Seurat input object. When you need metadata columns added back, pass the original
@@ -288,6 +324,8 @@ Seurat object explicitly:
 ```r
 seurat_obj <- get_robust_labels(results, return_seurat = TRUE, object = seurat_obj)
 ```
+
+In `resolution` mode, `resolution_diagnostics` keeps one row per input gamma, while the main result object is deduplicated by final cluster number so that each returned cluster number retains only the lowest-IC gamma.
 
 ### Interpretation Guidelines
 
@@ -406,6 +444,8 @@ So when you get results showing clusters 3-10 have IC scores < 1.05, it means:
 - Each of these cluster numbers produced stable results across different random initializations
 - The reported clustering solution is the most representative one from all trials
 - You can be confident in using these clustering solutions for downstream analysis
+
+If you use `resolution = c(...)`, the same IC logic is applied directly to each supplied gamma. When multiple gamma values collapse to the same final cluster number, scICER keeps the lowest-IC one in the main result and stores all evaluated gamma values in `resolution_diagnostics`.
 
 ### Will increasing n_trials or n_bootstrap improve results?
 

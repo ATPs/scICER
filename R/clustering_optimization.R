@@ -187,6 +187,169 @@ merge_small_clusters_to_neighbors <- function(labels, snn_graph, min_cluster_siz
   reindex_cluster_labels(merged)
 }
 
+derive_manual_resolution_seed <- function(seed, resolution, offset = 0L) {
+  if (is.null(seed)) {
+    return(NULL)
+  }
+
+  gamma_component <- if (is.finite(resolution)) {
+    as.integer(floor(abs(resolution * 100000) %% 100000000))
+  } else {
+    0L
+  }
+
+  derived_seed <- as.integer(
+    (as.double(seed) + as.double(gamma_component) + as.double(offset)) %% .Machine$integer.max
+  )
+  if (is.na(derived_seed) || derived_seed <= 0L) {
+    derived_seed <- 1L
+  }
+  derived_seed
+}
+
+finalize_selected_clustering <- function(matrix_ref, gamma, effective_cluster_median,
+                                         raw_cluster_median, admission_mode,
+                                         cluster_seed = NULL, n_bootstrap,
+                                         n_workers, snn_graph = NULL,
+                                         min_cluster_size = 1L, verbose = FALSE,
+                                         worker_id = "OPTIMIZER",
+                                         runtime_context = NULL) {
+  min_cluster_size <- max(1L, as.integer(min_cluster_size))
+  if (min_cluster_size > 1L && is.null(snn_graph)) {
+    stop("snn_graph must be provided when min_cluster_size > 1.")
+  }
+
+  on.exit(release_cluster_matrix(matrix_ref), add = TRUE)
+  best_clustering <- load_cluster_matrix(matrix_ref)
+  heartbeat <- create_heartbeat_logger(verbose = verbose, context = worker_id)
+  n_vertices <- nrow(best_clustering)
+  n_trials <- ncol(best_clustering)
+
+  if (verbose) {
+    scice_message(paste(worker_id, ": Phase 5 - Bootstrap analysis with", n_bootstrap, "iterations"))
+    bootstrap_start <- Sys.time()
+  }
+
+  bootstrap_workers <- cap_workers_by_memory(
+    max(1L, as.integer(n_workers)),
+    estimate_trial_matrix_bytes(n_vertices, n_trials, 1L),
+    runtime_context
+  )
+  bootstrap_workers <- min(bootstrap_workers, max(1L, as.integer(n_bootstrap)))
+  bootstrap_log_every <- max(1L, as.integer(floor(n_bootstrap / 5)))
+  should_log_bootstrap_step <- function(idx) {
+    idx == 1L || idx == n_bootstrap || (idx %% bootstrap_log_every) == 0L
+  }
+
+  if (bootstrap_workers == 1) {
+    ic_bootstrap <- numeric(n_bootstrap)
+
+    for (i in seq_len(n_bootstrap)) {
+      if (!is.null(cluster_seed)) {
+        bootstrap_seed <- cluster_seed + 10000 + i
+        set.seed(bootstrap_seed)
+      }
+
+      sample_indices <- sample.int(ncol(best_clustering), ncol(best_clustering), replace = TRUE)
+      bootstrap_matrix <- best_clustering[, sample_indices, drop = FALSE]
+      extracted <- extract_clustering_array(bootstrap_matrix)
+      ic_result <- calculate_ic_from_extracted(extracted)
+      ic_bootstrap[i] <- 1 / ic_result
+      heartbeat(function() {
+        paste(
+          "phase5 running - bootstrap", i, "/", n_bootstrap,
+          "- latest IC =", round(ic_bootstrap[i], 4)
+        )
+      })
+
+      if (verbose && should_log_bootstrap_step(i)) {
+        scice_message(paste(worker_id, ": Phase 5 progress", i, "/", n_bootstrap, "- IC =", round(ic_bootstrap[i], 4)))
+      }
+    }
+  } else {
+    ic_bootstrap <- cross_platform_mclapply(seq_len(n_bootstrap), function(i) {
+      if (!is.null(cluster_seed)) {
+        bootstrap_seed <- cluster_seed + 10000 + i
+        set.seed(bootstrap_seed)
+      }
+
+      sample_indices <- sample.int(ncol(best_clustering), ncol(best_clustering), replace = TRUE)
+      bootstrap_matrix <- best_clustering[, sample_indices, drop = FALSE]
+      extracted <- extract_clustering_array(bootstrap_matrix)
+      ic_result <- calculate_ic_from_extracted(extracted)
+      ic_value <- 1 / ic_result
+      if (verbose && should_log_bootstrap_step(i)) {
+        scice_message(paste(worker_id, ": Phase 5 progress", i, "/", n_bootstrap, "- IC =", round(ic_value, 4)))
+      }
+      ic_value
+    }, mc.cores = bootstrap_workers)
+
+    ic_bootstrap <- unlist(ic_bootstrap)
+  }
+
+  ic_median <- stats::median(ic_bootstrap)
+
+  if (verbose) {
+    bootstrap_time <- as.numeric(difftime(Sys.time(), bootstrap_start, units = "secs"))
+    scice_message(paste(worker_id, ": Bootstrap analysis completed in", round(bootstrap_time, 3), "seconds"))
+    scice_message(paste(worker_id, ": Bootstrap IC median:", round(ic_median, 4)))
+    scice_message(paste(worker_id, ": Bootstrap IC range: [", round(min(ic_bootstrap), 4), ", ", round(max(ic_bootstrap), 4), "]", sep = ""))
+    scice_message(paste(worker_id, ": OPTIMIZATION COMPLETE"))
+  }
+
+  extracted_best <- extract_clustering_array(best_clustering)
+  best_labels_raw <- get_best_clustering(extracted_best)
+  best_labels <- if (min_cluster_size > 1L) {
+    merge_small_clusters_to_neighbors(
+      labels = best_labels_raw,
+      snn_graph = snn_graph,
+      min_cluster_size = min_cluster_size
+    )
+  } else {
+    best_labels_raw
+  }
+  best_labels_raw_cluster_count <- as.integer(length(unique(best_labels_raw)))
+  best_labels_final_cluster_count <- as.integer(length(unique(best_labels)))
+
+  if (verbose && min_cluster_size > 1L) {
+    scice_message(
+      paste(
+        worker_id, ": Final best_labels merged small clusters to satisfy min_cluster_size (value =",
+        min_cluster_size,
+        "; final clusters =",
+        best_labels_final_cluster_count, ")"
+      )
+    )
+  }
+  if (verbose) {
+    scice_message(
+      paste(
+        worker_id, ": Selected diagnostics - gamma =", signif(gamma, 6),
+        "- effective_median =", signif(effective_cluster_median, 6),
+        "- raw_median =", signif(raw_cluster_median, 6),
+        "- admission_mode =", admission_mode,
+        "- best_labels_raw_clusters =", best_labels_raw_cluster_count,
+        "- best_labels_final_clusters =", best_labels_final_cluster_count
+      )
+    )
+  }
+
+  rm(best_clustering)
+
+  list(
+    gamma = gamma,
+    labels = extracted_best,
+    ic_median = ic_median,
+    ic_bootstrap = ic_bootstrap,
+    best_labels = best_labels,
+    effective_cluster_median = effective_cluster_median,
+    raw_cluster_median = raw_cluster_median,
+    admission_mode = admission_mode,
+    best_labels_raw_cluster_count = best_labels_raw_cluster_count,
+    best_labels_final_cluster_count = best_labels_final_cluster_count
+  )
+}
+
 #' Optimize clustering within a resolution range
 #'
 #' @description
@@ -237,6 +400,7 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
   }
   
   # Set deterministic seeds for this cluster number if base seed provided
+  cluster_seed <- NULL
   if (!is.null(seed)) {
     cluster_seed <- seed + target_clusters * 1000  # Different seed per cluster number
     set.seed(cluster_seed)
@@ -1023,136 +1187,200 @@ optimize_clustering <- function(igraph_obj, target_clusters, gamma_range, object
     }
   }
 
-  best_clustering <- load_cluster_matrix(best_ref)
   best_gamma_diag_index <- which.min(abs(gamma_sequence - best_gamma))
   selected_effective_cluster_median <- effective_cluster_medians[[best_gamma_diag_index]]
   selected_raw_cluster_median <- raw_cluster_medians[[best_gamma_diag_index]]
-  
-  # Bootstrap analysis
-  if (verbose) {
-    scice_message(paste(worker_id, ": Phase 5 - Bootstrap analysis with", n_bootstrap, "iterations"))
-    bootstrap_start <- Sys.time()
-  }
 
-  bootstrap_workers <- cap_workers_by_memory(
-    nested_workers,
-    estimate_trial_matrix_bytes(n_vertices, n_trials, 1L),
-    runtime_context
-  )
-  bootstrap_log_every <- max(1L, as.integer(floor(n_bootstrap / 5)))
-  should_log_bootstrap_step <- function(idx) {
-    idx == 1L || idx == n_bootstrap || (idx %% bootstrap_log_every) == 0L
-  }
-  
-  if (bootstrap_workers == 1) {
-    ic_bootstrap <- numeric(n_bootstrap)
-    
-    for (i in seq_len(n_bootstrap)) {
-      # Set deterministic seed for this bootstrap iteration if base seed provided
-      if (!is.null(seed)) {
-        bootstrap_seed <- cluster_seed + 10000 + i
-        set.seed(bootstrap_seed)
-      }
-      
-      sample_indices <- sample.int(ncol(best_clustering), ncol(best_clustering), replace = TRUE)
-      bootstrap_matrix <- best_clustering[, sample_indices, drop = FALSE]
-      extracted <- extract_clustering_array(bootstrap_matrix)
-      ic_result <- calculate_ic_from_extracted(extracted)
-      ic_bootstrap[i] <- 1 / ic_result
-      heartbeat(function() {
-        paste(
-          "phase5 running - bootstrap", i, "/", n_bootstrap,
-          "- latest IC =", round(ic_bootstrap[i], 4)
-        )
-      })
-      
-      if (verbose && should_log_bootstrap_step(i)) {
-        scice_message(paste(worker_id, ": Phase 5 progress", i, "/", n_bootstrap, "- IC =", round(ic_bootstrap[i], 4)))
-      }
-    }
-  } else {
-    ic_bootstrap <- cross_platform_mclapply(seq_len(n_bootstrap), function(i) {
-      # Set deterministic seed for this bootstrap iteration if base seed provided
-      if (!is.null(seed)) {
-        bootstrap_seed <- cluster_seed + 10000 + i
-        set.seed(bootstrap_seed)
-      }
-      
-      sample_indices <- sample.int(ncol(best_clustering), ncol(best_clustering), replace = TRUE)
-      bootstrap_matrix <- best_clustering[, sample_indices, drop = FALSE]
-      extracted <- extract_clustering_array(bootstrap_matrix)
-      ic_result <- calculate_ic_from_extracted(extracted)
-      ic_value <- 1 / ic_result
-      if (verbose && should_log_bootstrap_step(i)) {
-        scice_message(paste(worker_id, ": Phase 5 progress", i, "/", n_bootstrap, "- IC =", round(ic_value, 4)))
-      }
-      return(ic_value)
-    }, mc.cores = bootstrap_workers)
-    
-    ic_bootstrap <- unlist(ic_bootstrap)
-  }
-  
-  ic_median <- stats::median(ic_bootstrap)
-  
-  if (verbose) {
-    bootstrap_time <- as.numeric(difftime(Sys.time(), bootstrap_start, units = "secs"))
-    scice_message(paste(worker_id, ": Bootstrap analysis completed in", round(bootstrap_time, 3), "seconds"))
-    scice_message(paste(worker_id, ": Bootstrap IC median:", round(ic_median, 4)))
-    scice_message(paste(worker_id, ": Bootstrap IC range: [", round(min(ic_bootstrap), 4), ", ", round(max(ic_bootstrap), 4), "]", sep = ""))
-    scice_message(paste(worker_id, ": OPTIMIZATION COMPLETE"))
-  }
-  
-  # Extract raw best labels for diagnostics, then merge the final user-facing
-  # best_labels so min_cluster_size affects the returned clustering.
-  extracted_best <- extract_clustering_array(best_clustering)
-  best_labels_raw <- get_best_clustering(extracted_best)
-  best_labels <- if (min_cluster_size > 1L) {
-    merge_small_clusters_to_neighbors(
-      labels = best_labels_raw,
-      snn_graph = snn_graph,
-      min_cluster_size = min_cluster_size
-    )
-  } else {
-    best_labels_raw
-  }
-  best_labels_raw_cluster_count <- as.integer(length(unique(best_labels_raw)))
-  best_labels_final_cluster_count <- as.integer(length(unique(best_labels)))
-  if (verbose && min_cluster_size > 1L) {
-    scice_message(
-      paste(
-        worker_id, ": Final best_labels merged small clusters to satisfy min_cluster_size (value =",
-        min_cluster_size,
-        "; final clusters =",
-        best_labels_final_cluster_count, ")"
-      )
-    )
-  }
-  if (verbose) {
-    scice_message(
-      paste(
-        worker_id, ": Selected diagnostics - gamma =", signif(best_gamma, 6),
-        "- effective_median =", signif(selected_effective_cluster_median, 6),
-        "- raw_median =", signif(selected_raw_cluster_median, 6),
-        "- admission_mode =", admission_mode,
-        "- best_labels_raw_clusters =", best_labels_raw_cluster_count,
-        "- best_labels_final_clusters =", best_labels_final_cluster_count
-      )
-    )
-  }
-  release_cluster_matrix(best_ref)
-  rm(best_clustering)
-  
-  return(list(
+  finalized_result <- finalize_selected_clustering(
+    matrix_ref = best_ref,
     gamma = best_gamma,
-    labels = extracted_best,
-    ic_median = ic_median,
-    ic_bootstrap = ic_bootstrap,
-    best_labels = best_labels,
     effective_cluster_median = selected_effective_cluster_median,
     raw_cluster_median = selected_raw_cluster_median,
     admission_mode = admission_mode,
-    best_labels_raw_cluster_count = best_labels_raw_cluster_count,
-    n_iterations = k,
-    k = k
-  ))
-} 
+    cluster_seed = cluster_seed,
+    n_bootstrap = n_bootstrap,
+    n_workers = nested_workers,
+    snn_graph = snn_graph,
+    min_cluster_size = min_cluster_size,
+    verbose = verbose,
+    worker_id = worker_id,
+    runtime_context = runtime_context
+  )
+
+  finalized_result$n_iterations <- k
+  finalized_result$k <- k
+  finalized_result
+}
+
+evaluate_fixed_resolution <- function(igraph_obj, resolution, objective_function,
+                                      n_trials, n_bootstrap, seed = NULL, beta,
+                                      n_iterations, n_workers, snn_graph = NULL,
+                                      min_cluster_size = 1L, verbose = FALSE,
+                                      worker_id = "RESOLUTION",
+                                      in_parallel_context = FALSE,
+                                      runtime_context = NULL) {
+  min_cluster_size <- max(1L, as.integer(min_cluster_size))
+  if (min_cluster_size > 1L && is.null(snn_graph)) {
+    stop("snn_graph must be provided when min_cluster_size > 1.")
+  }
+
+  run_leiden_trial <- function(iterations) {
+    leiden_clustering(
+      igraph_obj, resolution, objective_function, iterations, beta, initial_membership = NULL
+    )
+  }
+
+  cluster_seed <- derive_manual_resolution_seed(seed, resolution)
+  if (!is.null(cluster_seed)) {
+    set.seed(cluster_seed)
+    if (verbose) {
+      scice_message(paste(worker_id, ": Set deterministic seed:", cluster_seed))
+    }
+  }
+
+  if (verbose) {
+    scice_message(paste(worker_id, ": Fixed-resolution parameters:"))
+    scice_message(paste(worker_id, ":   Resolution:", signif(resolution, 6)))
+    scice_message(paste(worker_id, ":   Trials:", n_trials))
+    scice_message(paste(worker_id, ":   Bootstrap iterations:", n_bootstrap))
+    scice_message(paste(worker_id, ":   Beta:", beta))
+    scice_message(paste(worker_id, ":   Leiden iterations:", n_iterations))
+    if (min_cluster_size > 1L) {
+      scice_message(
+        paste(
+          worker_id, ":   Counting uses effective clusters (size >=", min_cluster_size,
+          "); final merge applied only on best_labels"
+        )
+      )
+    }
+  }
+
+  n_vertices <- igraph::vcount(igraph_obj)
+  heartbeat <- create_heartbeat_logger(verbose = verbose, context = worker_id)
+  estimated_phase1_bytes <- estimate_trial_matrix_bytes(n_vertices, n_trials, 1L)
+  if (should_enable_spill(runtime_context, estimated_phase1_bytes)) {
+    activate_runtime_spill(runtime_context, estimated_bytes = estimated_phase1_bytes)
+  }
+
+  if (verbose) {
+    scice_message(paste(worker_id, ": Phase 1 - Evaluating fixed resolution with", n_trials, "trials"))
+    phase1_start <- Sys.time()
+    if (in_parallel_context) {
+      scice_message(paste(worker_id, ": Running in parallel context with worker budget", n_workers))
+    }
+  }
+
+  trial_workers <- max(1L, as.integer(n_workers))
+  if (!in_parallel_context) {
+    trial_workers <- min(trial_workers, max(1L, as.integer(n_trials)))
+  }
+  trial_workers <- cap_workers_by_memory(
+    trial_workers,
+    estimate_trial_matrix_bytes(n_vertices, 1L, 1L),
+    runtime_context
+  )
+
+  phase1_log_every <- max(1L, as.integer(floor(n_trials / 5)))
+  should_log_trial_step <- function(idx) {
+    idx == 1L || idx == n_trials || (idx %% phase1_log_every) == 0L
+  }
+  run_single_trial <- function(trial_idx) {
+    if (!is.null(cluster_seed)) {
+      trial_seed <- cluster_seed + trial_idx
+      set.seed(trial_seed)
+    }
+    labels <- run_leiden_trial(n_iterations)
+    heartbeat(function() {
+      paste(
+        "phase1 running - fixed resolution", signif(resolution, 6),
+        "- trial", trial_idx, "/", n_trials
+      )
+    })
+    if (verbose && should_log_trial_step(trial_idx)) {
+      scice_message(
+        paste(
+          worker_id, ": Phase 1 progress trial", trial_idx, "/", n_trials,
+          "(resolution =", signif(resolution, 6), ")"
+        )
+      )
+    }
+    labels
+  }
+
+  if (trial_workers == 1) {
+    trial_results <- vector("list", n_trials)
+    for (trial_idx in seq_len(n_trials)) {
+      trial_results[[trial_idx]] <- run_single_trial(trial_idx)
+    }
+  } else {
+    trial_results <- cross_platform_mclapply(
+      seq_len(n_trials),
+      run_single_trial,
+      mc.cores = trial_workers
+    )
+  }
+
+  cluster_matrix <- do.call(cbind, trial_results)
+  effective_clusters_vec <- vapply(
+    seq_len(n_trials),
+    function(trial_idx) {
+      count_effective_clusters(cluster_matrix[, trial_idx], min_cluster_size = min_cluster_size)
+    },
+    integer(1)
+  )
+  raw_clusters_vec <- vapply(
+    seq_len(n_trials),
+    function(trial_idx) {
+      as.integer(length(unique(cluster_matrix[, trial_idx])))
+    },
+    integer(1)
+  )
+  median_effective_clusters <- stats::median(effective_clusters_vec)
+  raw_cluster_median <- stats::median(raw_clusters_vec)
+
+  extracted <- extract_clustering_array(cluster_matrix)
+  ic_result <- calculate_ic_from_extracted(extracted)
+  phase1_ic <- 1 / ic_result
+  rm(extracted)
+
+  matrix_ref <- store_cluster_matrix(
+    cluster_matrix,
+    runtime_context = runtime_context,
+    prefix = sprintf("fixed_resolution_%s", gsub("[^0-9A-Za-z]+", "_", format(resolution, scientific = FALSE)))
+  )
+  rm(cluster_matrix)
+
+  if (verbose) {
+    phase1_time <- as.numeric(difftime(Sys.time(), phase1_start, units = "secs"))
+    scice_message(paste(worker_id, ": Phase 1 completed in", round(phase1_time, 3), "seconds"))
+    scice_message(
+      paste(
+        worker_id, ": Phase 1 diagnostics - resolution =", signif(resolution, 6),
+        "- median_effective =", signif(median_effective_clusters, 6),
+        "- median_raw =", signif(raw_cluster_median, 6),
+        "- IC (all trials) =", round(phase1_ic, 4)
+      )
+    )
+  }
+
+  finalized_result <- finalize_selected_clustering(
+    matrix_ref = matrix_ref,
+    gamma = resolution,
+    effective_cluster_median = median_effective_clusters,
+    raw_cluster_median = raw_cluster_median,
+    admission_mode = "manual_resolution",
+    cluster_seed = cluster_seed,
+    n_bootstrap = n_bootstrap,
+    n_workers = trial_workers,
+    snn_graph = snn_graph,
+    min_cluster_size = min_cluster_size,
+    verbose = verbose,
+    worker_id = worker_id,
+    runtime_context = runtime_context
+  )
+
+  finalized_result$phase1_ic <- phase1_ic
+  finalized_result$n_iterations <- n_iterations
+  finalized_result$k <- n_iterations
+  finalized_result
+}

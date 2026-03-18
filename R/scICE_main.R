@@ -4,6 +4,176 @@
 #' @importFrom igraph make_empty_graph add_edges E vcount ecount cluster_leiden membership
 NULL
 
+emit_scice_notice <- function(message_text, verbose = FALSE) {
+  if (isTRUE(verbose)) {
+    scice_message(message_text)
+  } else {
+    message(message_text)
+  }
+}
+
+build_manual_resolution_results <- function(igraph_obj, resolution_values, n_workers,
+                                            n_trials, n_bootstrap, seed, beta,
+                                            n_iterations, objective_function,
+                                            snn_graph = NULL, min_cluster_size = 1L,
+                                            verbose = FALSE, runtime_context = NULL) {
+  resolution_values <- as.numeric(resolution_values)
+  min_cluster_size <- max(1L, as.integer(min_cluster_size))
+  n_vertices <- igraph::vcount(igraph_obj)
+
+  actual_workers <- if (.Platform$OS.type == "windows" && n_workers > 1L) 1L else as.integer(n_workers)
+  active_resolution_workers <- max(1L, min(as.integer(length(resolution_values)), actual_workers))
+  per_resolution_worker_budget <- max(
+    1L,
+    as.integer(floor(as.double(actual_workers) / as.double(active_resolution_workers)))
+  )
+  per_resolution_worker_budget <- cap_workers_by_memory(
+    per_resolution_worker_budget,
+    estimate_trial_matrix_bytes(n_vertices, n_trials, 1L),
+    runtime_context
+  )
+
+  if (verbose) {
+    scice_message("CLUSTERING_MAIN: Using manual resolution mode.")
+    scice_message(
+      paste(
+        "CLUSTERING_MAIN: Resolution worker layout -",
+        active_resolution_workers, "resolution workers x",
+        per_resolution_worker_budget, "trial/bootstrap workers"
+      )
+    )
+  }
+
+  resolution_results <- cross_platform_mclapply(
+    seq_along(resolution_values),
+    function(resolution_idx) {
+      resolution_value <- resolution_values[[resolution_idx]]
+      worker_id <- paste("RESOLUTION", resolution_idx)
+      if (verbose) {
+        scice_message(
+          paste(worker_id, ": Starting manual resolution evaluation for gamma =", signif(resolution_value, 6))
+        )
+      }
+
+      evaluate_fixed_resolution(
+        igraph_obj = igraph_obj,
+        resolution = resolution_value,
+        objective_function = objective_function,
+        n_trials = n_trials,
+        n_bootstrap = n_bootstrap,
+        seed = seed,
+        beta = beta,
+        n_iterations = n_iterations,
+        n_workers = per_resolution_worker_budget,
+        snn_graph = snn_graph,
+        min_cluster_size = min_cluster_size,
+        verbose = verbose,
+        worker_id = worker_id,
+        in_parallel_context = TRUE,
+        runtime_context = runtime_context
+      )
+    },
+    mc.cores = active_resolution_workers,
+    mc.preschedule = FALSE
+  )
+
+  cluster_numbers <- vapply(
+    resolution_results,
+    function(x) as.integer(x$best_labels_final_cluster_count),
+    integer(1)
+  )
+  ic_scores <- vapply(
+    resolution_results,
+    function(x) as.numeric(x$ic_median),
+    numeric(1)
+  )
+
+  pick_best_resolution <- function(indices) {
+    finite_local <- which(is.finite(ic_scores[indices]))
+    if (length(finite_local) == 0L) {
+      return(indices[[1]])
+    }
+    indices[[finite_local[[which.min(ic_scores[indices][finite_local])]]]]
+  }
+
+  grouped_indices <- split(seq_along(cluster_numbers), cluster_numbers)
+  selected_indices <- vapply(grouped_indices, pick_best_resolution, integer(1))
+  selected_indices <- selected_indices[order(cluster_numbers[selected_indices], resolution_values[selected_indices])]
+  selected_mask <- rep(FALSE, length(resolution_results))
+  selected_mask[selected_indices] <- TRUE
+
+  resolution_diagnostics <- data.frame(
+    resolution = resolution_values,
+    cluster_number = cluster_numbers,
+    ic = ic_scores,
+    effective_cluster_median = vapply(
+      resolution_results,
+      function(x) as.numeric(x$effective_cluster_median),
+      numeric(1)
+    ),
+    raw_cluster_median = vapply(
+      resolution_results,
+      function(x) as.numeric(x$raw_cluster_median),
+      numeric(1)
+    ),
+    best_labels_raw_cluster_count = vapply(
+      resolution_results,
+      function(x) as.integer(x$best_labels_raw_cluster_count),
+      integer(1)
+    ),
+    best_labels_final_cluster_count = vapply(
+      resolution_results,
+      function(x) as.integer(x$best_labels_final_cluster_count),
+      integer(1)
+    ),
+    n_iter = vapply(
+      resolution_results,
+      function(x) as.integer(x$n_iterations),
+      integer(1)
+    ),
+    selected = selected_mask,
+    stringsAsFactors = FALSE
+  )
+  rownames(resolution_diagnostics) <- NULL
+
+  selected_results <- resolution_results[selected_indices]
+
+  list(
+    gamma = vapply(selected_results, function(x) as.numeric(x$gamma), numeric(1)),
+    labels = lapply(selected_results, function(x) x$labels),
+    ic = vapply(selected_results, function(x) as.numeric(x$ic_median), numeric(1)),
+    ic_vec = lapply(selected_results, function(x) x$ic_bootstrap),
+    n_cluster = vapply(
+      selected_results,
+      function(x) as.integer(x$best_labels_final_cluster_count),
+      integer(1)
+    ),
+    best_labels = lapply(selected_results, function(x) x$best_labels),
+    effective_cluster_median = vapply(
+      selected_results,
+      function(x) as.numeric(x$effective_cluster_median),
+      numeric(1)
+    ),
+    raw_cluster_median = vapply(
+      selected_results,
+      function(x) as.numeric(x$raw_cluster_median),
+      numeric(1)
+    ),
+    admission_mode = vapply(selected_results, function(x) as.character(x$admission_mode), character(1)),
+    best_labels_raw_cluster_count = vapply(
+      selected_results,
+      function(x) as.integer(x$best_labels_raw_cluster_count),
+      integer(1)
+    ),
+    n_iter = vapply(selected_results, function(x) as.integer(x$n_iterations), integer(1)),
+    mei = lapply(selected_results, function(x) calculate_mei_from_array(x$labels)),
+    k = vapply(selected_results, function(x) as.integer(x$k), integer(1)),
+    excluded = rep(FALSE, length(selected_results)),
+    exclusion_reason = rep("none", length(selected_results)),
+    resolution_diagnostics = resolution_diagnostics
+  )
+}
+
 #' Single-cell Inconsistency-based Clustering Evaluation (scICE)
 #'
 #' @description
@@ -53,6 +223,12 @@ NULL
 #'   Default: \code{2}, matching Seurat singleton behavior.
 #' @param resolution_tolerance Tolerance for resolution parameter search (default: 1e-8)
 #' @param verbose Whether to print progress messages (default: TRUE)
+#' @param resolution Optional manual Leiden resolution (gamma) value or vector.
+#'   When provided, scICER skips \code{cluster_range}-based resolution search,
+#'   evaluates the supplied gamma values directly, and keeps the lowest-IC
+#'   solution for each final cluster number. If both \code{resolution} and
+#'   \code{cluster_range} are provided, \code{cluster_range} is ignored with a
+#'   user-facing message.
 #'
 #' @return A list containing:
 #' \describe{
@@ -70,6 +246,11 @@ NULL
 #'   \item{mei}{Mutual Element-wise Information scores}
 #'   \item{consistent_clusters}{Cluster numbers meeting consistency threshold}
 #'   \item{min_cluster_size}{Minimum cluster size used for effective-count matching}
+#'   \item{analysis_mode}{Whether the run used \code{"cluster_range"} or \code{"resolution"} mode}
+#'   \item{resolution_input}{Manual gamma values requested by the user (if any)}
+#'   \item{resolution_diagnostics}{Per-gamma evaluation summary for manual resolution mode}
+#'   \item{best_cluster}{Cluster number with the lowest IC score among returned results}
+#'   \item{best_resolution}{Gamma corresponding to \code{best_cluster}}
 #' }
 #'
 #' @examples
@@ -85,6 +266,12 @@ NULL
 #' 
 #' # Extract consistent clustering labels
 #' consistent_labels <- get_robust_labels(scice_results, threshold = 1.005)
+#'
+#' # Evaluate manually chosen gamma values
+#' scice_manual <- scICE_clustering(
+#'   pbmc_small,
+#'   resolution = c(0.2, 0.4, 0.8)
+#' )
 #' }
 #'
 #' @export
@@ -104,7 +291,20 @@ scICE_clustering <- function(object,
                             remove_threshold = 1.15,
                             min_cluster_size = 2,
                             resolution_tolerance = 1e-8,
-                            verbose = TRUE) {
+                            verbose = TRUE,
+                            resolution = NULL) {
+  cluster_range_was_supplied <- !missing(cluster_range)
+  resolution_mode <- !missing(resolution) && !is.null(resolution)
+  resolution_input <- NULL
+  if (resolution_mode) {
+    if (!is.numeric(resolution) || length(resolution) == 0L) {
+      stop("resolution must be a non-empty numeric value or vector.")
+    }
+    if (anyNA(resolution) || any(!is.finite(resolution))) {
+      stop("resolution must contain only finite numeric values.")
+    }
+    resolution_input <- as.numeric(resolution)
+  }
   
   # Clear clustering cache at start of new scICE run for optimal performance
   if (exists("clear_clustering_cache") && is.function(clear_clustering_cache)) {
@@ -147,6 +347,24 @@ scICE_clustering <- function(object,
     stop("min_cluster_size must be >= 1.")
   }
 
+  if (resolution_mode && cluster_range_was_supplied) {
+    emit_scice_notice(
+      "scICE_clustering: `resolution` provided; ignoring `cluster_range` and evaluating manual gamma values directly.",
+      verbose = verbose
+    )
+  }
+  if (resolution_mode && anyDuplicated(resolution_input)) {
+    duplicate_count <- sum(duplicated(resolution_input))
+    resolution_input <- resolution_input[!duplicated(resolution_input)]
+    emit_scice_notice(
+      paste(
+        "scICE_clustering: removed", duplicate_count,
+        "duplicated manual resolution value(s) before evaluation."
+      ),
+      verbose = verbose
+    )
+  }
+
   requested_workers <- as.integer(n_workers)
   detected_cores <- parallel::detectCores()
   if (is.na(detected_cores) || detected_cores < 1) {
@@ -174,8 +392,18 @@ scICE_clustering <- function(object,
     scice_message(paste(rep("-", 80), collapse = ""))
     scice_message("INPUT PARAMETERS:")
     scice_message(paste("  Using graph:", graph_name))
-    scice_message(paste("  Testing cluster range:", paste(cluster_range, collapse = ", ")))
-    scice_message(paste("  Range: ", min(cluster_range), "-", max(cluster_range), " (", length(cluster_range), " values)"))
+    if (resolution_mode) {
+      scice_message(paste("  Analysis mode: manual resolution"))
+      scice_message(paste("  Manual resolutions:", paste(signif(resolution_input, 6), collapse = ", ")))
+      scice_message(paste("  Resolution count:", length(resolution_input)))
+      if (cluster_range_was_supplied) {
+        scice_message("  cluster_range: ignored because `resolution` was provided")
+      }
+    } else {
+      scice_message(paste("  Analysis mode: cluster range search"))
+      scice_message(paste("  Testing cluster range:", paste(cluster_range, collapse = ", ")))
+      scice_message(paste("  Range: ", min(cluster_range), "-", max(cluster_range), " (", length(cluster_range), " values)"))
+    }
     scice_message(paste("  Requested workers:", requested_workers))
     scice_message(paste("  Effective workers:", n_workers))
     scice_message(paste("  Internal memory budget (bytes):", format(runtime_context$memory_budget_bytes, scientific = FALSE)))
@@ -187,12 +415,20 @@ scICE_clustering <- function(object,
     scice_message(paste("  Maximum optimization iterations:", max_iterations))
     scice_message(paste("  IC threshold:", ic_threshold))
     scice_message(paste("  Objective function:", objective_function))
-    scice_message(paste("  Remove threshold:", remove_threshold))
+    if (resolution_mode) {
+      scice_message("  Remove threshold: ignored in manual resolution mode")
+    } else {
+      scice_message(paste("  Remove threshold:", remove_threshold))
+    }
     scice_message(paste("  Minimum cluster size:", min_cluster_size))
     if (min_cluster_size > 1L) {
       scice_message("  min_cluster_size semantics: counting uses effective clusters; final best_labels are merged")
     }
-    scice_message(paste("  Resolution tolerance:", resolution_tolerance))
+    if (resolution_mode) {
+      scice_message("  Resolution tolerance: not used in manual resolution mode")
+    } else {
+      scice_message(paste("  Resolution tolerance:", resolution_tolerance))
+    }
     scice_message(paste(rep("-", 80), collapse = ""))
   }
   
@@ -279,26 +515,47 @@ scICE_clustering <- function(object,
       scice_message(paste("  Parallel workers will be spawned for sub-tasks"))
     }
   }
-  
-  results <- clustering_main(
-    igraph_obj = igraph_obj,
-    cluster_range = cluster_range,
-    n_workers = n_workers,
-    n_trials = n_trials,
-    n_bootstrap = n_bootstrap,
-    seed = seed,
-    beta = beta,
-    n_iterations = n_iterations,
-    max_iterations = max_iterations,
-    objective_function = objective_function,
-    remove_threshold = remove_threshold,
-    snn_graph = graph,
-    min_cluster_size = min_cluster_size,
-    resolution_tolerance = resolution_tolerance,
-    verbose = verbose,
-    in_parallel_context = FALSE,
-    runtime_context = runtime_context
-  )
+
+  if (resolution_mode) {
+    if (verbose) {
+      scice_message("  Manual resolution mode selected - skipping cluster_range search and evaluating supplied gamma values directly.")
+    }
+    results <- build_manual_resolution_results(
+      igraph_obj = igraph_obj,
+      resolution_values = resolution_input,
+      n_workers = n_workers,
+      n_trials = n_trials,
+      n_bootstrap = n_bootstrap,
+      seed = seed,
+      beta = beta,
+      n_iterations = n_iterations,
+      objective_function = objective_function,
+      snn_graph = graph,
+      min_cluster_size = min_cluster_size,
+      verbose = verbose,
+      runtime_context = runtime_context
+    )
+  } else {
+    results <- clustering_main(
+      igraph_obj = igraph_obj,
+      cluster_range = cluster_range,
+      n_workers = n_workers,
+      n_trials = n_trials,
+      n_bootstrap = n_bootstrap,
+      seed = seed,
+      beta = beta,
+      n_iterations = n_iterations,
+      max_iterations = max_iterations,
+      objective_function = objective_function,
+      remove_threshold = remove_threshold,
+      snn_graph = graph,
+      min_cluster_size = min_cluster_size,
+      resolution_tolerance = resolution_tolerance,
+      verbose = verbose,
+      in_parallel_context = FALSE,
+      runtime_context = runtime_context
+    )
+  }
   
   if (verbose) {
     clustering_end <- Sys.time()
@@ -321,8 +578,10 @@ scICE_clustering <- function(object,
   # Add cell names to results
   results$cell_names <- Cells(object)
   
-  # Store original cluster range for reference
-  results$cluster_range_tested <- cluster_range
+  results$analysis_mode <- if (resolution_mode) "resolution" else "cluster_range"
+  results$resolution_input <- if (resolution_mode) resolution_input else NULL
+  results$resolution_diagnostics <- if (resolution_mode) results$resolution_diagnostics else NULL
+  results$cluster_range_tested <- if (resolution_mode) results$n_cluster else cluster_range
   
   # Determine consistent clusters using actual cluster numbers, not indices
   if (verbose) {
@@ -356,10 +615,22 @@ scICE_clustering <- function(object,
                     "consistent cluster numbers:", paste(results$consistent_clusters, collapse = ", ")))
       
       # Report excluded clusters
-      excluded_clusters <- setdiff(cluster_range, results$n_cluster)
-      if (length(excluded_clusters) > 0) {
+      excluded_clusters <- if (resolution_mode) {
+        integer(0)
+      } else {
+        setdiff(cluster_range, results$n_cluster)
+      }
+      if (!resolution_mode && length(excluded_clusters) > 0) {
         scice_message(paste("  Excluded", length(excluded_clusters), "cluster numbers due to instability:", 
                       paste(excluded_clusters, collapse = ", ")))
+      }
+      if (resolution_mode && !is.null(results$resolution_diagnostics)) {
+        deduplicated_count <- sum(!results$resolution_diagnostics$selected)
+        scice_message(paste("  Manual resolutions evaluated:", nrow(results$resolution_diagnostics)))
+        scice_message(paste("  Manual resolutions retained after per-cluster IC selection:", length(results$n_cluster)))
+        if (deduplicated_count > 0) {
+          scice_message(paste("  Manual resolutions superseded by lower-IC matches:", deduplicated_count))
+        }
       }
       
       # Report tested but inconsistent clusters
@@ -371,7 +642,7 @@ scICE_clustering <- function(object,
       
       # Detailed breakdown
       scice_message("  Detailed breakdown:")
-      scice_message(paste("    - Requested clusters:", length(cluster_range)))
+      scice_message(paste("    - Requested clusters:", if (resolution_mode) length(resolution_input) else length(cluster_range)))
       scice_message(paste("    - Excluded clusters:", length(excluded_clusters)))
       scice_message(paste("    - Tested clusters:", length(results$n_cluster)))
       scice_message(paste("    - Consistent clusters:", length(results$consistent_clusters)))
@@ -401,6 +672,15 @@ scICE_clustering <- function(object,
   # Keep lightweight result object (do not store full Seurat object)
   results$graph_name <- graph_name
   results$min_cluster_size <- min_cluster_size
+  valid_best_indices <- which(!is.na(results$ic))
+  if (length(valid_best_indices) > 0) {
+    best_index <- valid_best_indices[[which.min(results$ic[valid_best_indices])]]
+    results$best_cluster <- results$n_cluster[[best_index]]
+    results$best_resolution <- results$gamma[[best_index]]
+  } else {
+    results$best_cluster <- NA_integer_
+    results$best_resolution <- NA_real_
+  }
   
   class(results) <- "scICE"
   return(results)

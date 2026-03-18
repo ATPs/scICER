@@ -247,6 +247,14 @@ create_results_summary <- function(scice_results, threshold = 1.005) {
   if (!inherits(scice_results, "scICE")) {
     stop("Input must be a scICE results object")
   }
+
+  analysis_mode <- if (!is.null(scice_results$analysis_mode) &&
+                       length(scice_results$analysis_mode) == 1L &&
+                       nzchar(scice_results$analysis_mode)) {
+    scice_results$analysis_mode
+  } else {
+    "cluster_range"
+  }
   
   # Header
   summary <- c(
@@ -260,12 +268,47 @@ create_results_summary <- function(scice_results, threshold = 1.005) {
   )
   
   # Analysis parameters
-  summary <- c(summary,
-              "ANALYSIS PARAMETERS:",
-              paste("- Cluster range tested:", paste(range(scice_results$n_cluster), collapse = "-")),
-              paste("- Total cluster numbers:", length(scice_results$n_cluster)),
-              paste("- IC threshold:", threshold),
-              "")
+  parameter_lines <- c(
+    "ANALYSIS PARAMETERS:",
+    paste("- Analysis mode:", analysis_mode)
+  )
+  if (identical(analysis_mode, "resolution")) {
+    manual_resolutions <- if (!is.null(scice_results$resolution_input) &&
+                              length(scice_results$resolution_input) > 0) {
+      paste(signif(scice_results$resolution_input, 6), collapse = ", ")
+    } else {
+      "none"
+    }
+    parameter_lines <- c(
+      parameter_lines,
+      paste("- Manual resolutions evaluated:", manual_resolutions),
+      paste("- Returned cluster numbers:", paste(scice_results$n_cluster, collapse = ", "))
+    )
+  } else {
+    cluster_range_label <- if (length(scice_results$n_cluster) > 0) {
+      paste(range(scice_results$n_cluster), collapse = "-")
+    } else {
+      "none"
+    }
+    parameter_lines <- c(
+      parameter_lines,
+      paste("- Cluster range tested:", cluster_range_label),
+      paste("- Total cluster numbers:", length(scice_results$n_cluster))
+    )
+  }
+  if (!is.null(scice_results$best_cluster) && length(scice_results$best_cluster) == 1L &&
+      !is.na(scice_results$best_cluster)) {
+    parameter_lines <- c(
+      parameter_lines,
+      paste(
+        "- Lowest-IC solution:",
+        scice_results$best_cluster,
+        "clusters at resolution",
+        signif(scice_results$best_resolution, 6)
+      )
+    )
+  }
+  summary <- c(summary, parameter_lines, paste("- IC threshold:", threshold), "")
   
   # Results overview
   consistent_clusters <- which(scice_results$ic < threshold)
@@ -329,7 +372,11 @@ create_results_summary <- function(scice_results, threshold = 1.005) {
     recommendations <- c(
       "No clusters meet the strict threshold. Consider:",
       "- Using a more lenient threshold (e.g., 1.01)",
-      "- Expanding the cluster range",
+      if (identical(analysis_mode, "resolution")) {
+        "- Trying additional manual resolution values"
+      } else {
+        "- Expanding the cluster range"
+      },
       "- Checking data preprocessing steps"
     )
   } else if (n_consistent == 1) {
