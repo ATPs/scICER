@@ -92,26 +92,31 @@ test_that("utility functions handle edge cases", {
   expect_error(calculate_ecs(c(1, 2), c(1)))  # Different lengths
 })
 
-test_that("calculate_ecs scalar mode is stable for large inputs", {
+test_that("calculate_ecs scalar mode equals the mean element-wise score", {
+  set.seed(1)
+  n <- 100000
+  cluster_a <- sample(1:10, n, replace = TRUE)
+  cluster_b <- sample(1:10, n, replace = TRUE)
+
+  scalar_score <- calculate_ecs(cluster_a, cluster_b, return_vector = FALSE)
+  expected_scalar <- mean(calculate_ecs(cluster_a, cluster_b, return_vector = TRUE))
+  expect_equal(scalar_score, expected_scalar, tolerance = 1e-10)
+  expect_true(is.finite(scalar_score))
+  expect_true(scalar_score >= 0 && scalar_score <= 1)
+})
+
+test_that("calculate_ecs scalar mode stays stable for very large inputs", {
   set.seed(1)
   n <- 250000
   cluster_a <- sample(1:10, n, replace = TRUE)
   cluster_b <- sample(1:10, n, replace = TRUE)
 
   scalar_score <- calculate_ecs(cluster_a, cluster_b, return_vector = FALSE)
-  compact_labels <- function(x) as.integer(factor(x, levels = unique(x)))
-  expected_scalar <- ClustAssess::element_sim(
-    compact_labels(cluster_a),
-    compact_labels(cluster_b),
-    alpha = 0.9
-  )
   vector_score <- mean(calculate_ecs(cluster_a, cluster_b, return_vector = TRUE))
 
-  expect_equal(scalar_score, expected_scalar, tolerance = 1e-10)
+  expect_equal(scalar_score, vector_score, tolerance = 1e-10)
   expect_true(is.finite(scalar_score))
   expect_true(scalar_score >= 0 && scalar_score <= 1)
-  expect_true(is.finite(vector_score))
-  expect_true(vector_score >= 0 && vector_score <= 1)
 })
 
 test_that("get_robust_labels requires explicit Seurat object for return_seurat", {
@@ -1172,12 +1177,12 @@ test_that("find_resolution_ranges uses serial preliminary trials when per-target
   withCallingHandlers(
     scICER:::find_resolution_ranges(
       igraph_obj = ig,
-      cluster_range = 1:4,
+      cluster_range = 1:2,
       start_g = 0,
       end_g = 0.2,
       objective_function = "modularity",
       resolution_tolerance = 1.0,
-      n_workers = 8,
+      n_workers = 2,
       verbose = TRUE
     ),
     message = function(m) {

@@ -16,7 +16,10 @@ NULL
 #' so users can decide whether to proceed or follow suggested commands.
 #'
 #' @param seurat_obj A Seurat object to validate
-#' @param graph_name Name of the graph to check for (default: "snn")
+#' @param graph_name Name of the graph to check for. If \code{NULL}, uses the
+#'   default assay SNN graph name \code{<DefaultAssay>_snn}. For backward
+#'   compatibility, \code{"snn"} also falls back to that assay-specific graph
+#'   when present.
 #' @return List with validation results and suggestions
 #' @export
 #' @examples
@@ -33,31 +36,85 @@ NULL
 #'   cat(paste(validation$suggestions, collapse = "\n"))
 #' }
 #' }
-check_seurat_ready <- function(seurat_obj, graph_name = "snn") {
+check_seurat_ready <- function(seurat_obj, graph_name = NULL) {
   
   if (!inherits(seurat_obj, "Seurat")) {
     stop("Input must be a Seurat object")
   }
+
+  assay_name <- SeuratObject::DefaultAssay(seurat_obj)
+  if (!nzchar(assay_name) || !(assay_name %in% names(seurat_obj@assays))) {
+    assay_name <- names(seurat_obj@assays)[[1]]
+  }
+
+  get_assay_data_safe <- function(layer_name) {
+    layer_data <- tryCatch(
+      SeuratObject::GetAssayData(seurat_obj, assay = assay_name, layer = layer_name),
+      error = function(e) NULL
+    )
+    if (!is.null(layer_data)) {
+      return(layer_data)
+    }
+
+    slot_data <- tryCatch(
+      SeuratObject::GetAssayData(seurat_obj, assay = assay_name, slot = layer_name),
+      error = function(e) NULL
+    )
+    if (!is.null(slot_data)) {
+      return(slot_data)
+    }
+
+    assay <- seurat_obj@assays[[assay_name]]
+    if (!is.null(assay) && layer_name %in% methods::slotNames(assay)) {
+      return(methods::slot(assay, layer_name))
+    }
+
+    if (!is.null(assay) && "layers" %in% methods::slotNames(assay)) {
+      assay_layers <- methods::slot(assay, "layers")
+      if (layer_name %in% names(assay_layers)) {
+        return(assay_layers[[layer_name]])
+      }
+    }
+
+    NULL
+  }
+
+  default_graph_name <- paste0(assay_name, "_snn")
+  resolved_graph_name <- graph_name
+  if (is.null(resolved_graph_name)) {
+    resolved_graph_name <- default_graph_name
+  } else if (identical(resolved_graph_name, "snn") &&
+             !(resolved_graph_name %in% names(seurat_obj@graphs)) &&
+             default_graph_name %in% names(seurat_obj@graphs)) {
+    resolved_graph_name <- default_graph_name
+  }
   
   issues <- character()
   suggestions <- character()
+  data_layer <- get_assay_data_safe("data")
+  counts_layer <- get_assay_data_safe("counts")
+  scale_layer <- get_assay_data_safe("scale.data")
   
   # Check for normalization
-  if (!"data" %in% names(seurat_obj@assays$RNA@layers) && 
-      is.null(seurat_obj@assays$RNA@data) || 
-      all(seurat_obj@assays$RNA@data == seurat_obj@assays$RNA@counts)) {
+  has_normalized_data <- !is.null(data_layer) && length(data_layer) > 0
+  data_matches_counts <- FALSE
+  if (has_normalized_data && !is.null(counts_layer) && identical(dim(data_layer), dim(counts_layer))) {
+    data_matches_counts <- isTRUE(all.equal(data_layer, counts_layer))
+  }
+
+  if (!has_normalized_data || data_matches_counts) {
     issues <- c(issues, "Data not normalized")
     suggestions <- c(suggestions, "Run: seurat_obj <- NormalizeData(seurat_obj)")
   }
   
   # Check for variable features
-  if (length(VariableFeatures(seurat_obj)) == 0) {
+  if (length(SeuratObject::VariableFeatures(seurat_obj)) == 0) {
     issues <- c(issues, "No variable features found")
     suggestions <- c(suggestions, "Run: seurat_obj <- FindVariableFeatures(seurat_obj)")
   }
   
   # Check for scaling
-  if (is.null(seurat_obj@assays$RNA@scale.data) || nrow(seurat_obj@assays$RNA@scale.data) == 0) {
+  if (is.null(scale_layer) || nrow(scale_layer) == 0) {
     issues <- c(issues, "Data not scaled")
     suggestions <- c(suggestions, "Run: seurat_obj <- ScaleData(seurat_obj)")
   }
@@ -69,8 +126,8 @@ check_seurat_ready <- function(seurat_obj, graph_name = "snn") {
   }
   
   # Check for neighbor graph
-  if (!(graph_name %in% names(seurat_obj@graphs))) {
-    issues <- c(issues, paste("Graph", graph_name, "not found"))
+  if (!(resolved_graph_name %in% names(seurat_obj@graphs))) {
+    issues <- c(issues, paste("Graph", resolved_graph_name, "not found"))
     suggestions <- c(suggestions, "Run: seurat_obj <- FindNeighbors(seurat_obj, dims = 1:20)")
   }
   
@@ -86,7 +143,9 @@ check_seurat_ready <- function(seurat_obj, graph_name = "snn") {
     ready = ready,
     issues = issues,
     suggestions = suggestions,
-    summary = summary_msg
+    summary = summary_msg,
+    assay = assay_name,
+    graph_name = resolved_graph_name
   ))
 }
 
@@ -248,6 +307,14 @@ create_results_summary <- function(scice_results, threshold = 1.005) {
     stop("Input must be a scICE results object")
   }
 
+  package_version <- tryCatch(
+    as.character(utils::packageVersion("scICER")),
+    error = function(e) NA_character_
+  )
+  if (!is.character(package_version) || length(package_version) != 1L || is.na(package_version)) {
+    package_version <- "unknown"
+  }
+
   analysis_mode <- if (!is.null(scice_results$analysis_mode) &&
                        length(scice_results$analysis_mode) == 1L &&
                        nzchar(scice_results$analysis_mode)) {
@@ -263,7 +330,7 @@ create_results_summary <- function(scice_results, threshold = 1.005) {
     "=====================================",
     "",
     paste("Analysis Date:", Sys.time()),
-    paste("Package Version: scICER 1.0.0"),
+    paste("Package Version: scICER", package_version),
     ""
   )
   
@@ -311,7 +378,7 @@ create_results_summary <- function(scice_results, threshold = 1.005) {
   summary <- c(summary, parameter_lines, paste("- IC threshold:", threshold), "")
   
   # Results overview
-  consistent_clusters <- which(scice_results$ic < threshold)
+  consistent_clusters <- which(is.finite(scice_results$ic) & scice_results$ic < threshold)
   n_consistent <- length(consistent_clusters)
   
   summary <- c(summary,
@@ -325,12 +392,22 @@ create_results_summary <- function(scice_results, threshold = 1.005) {
               "")
   
   # IC scores summary
-  ic_stats <- c(
-    paste("- Best IC score:", round(min(scice_results$ic), 4)),
-    paste("- Worst IC score:", round(max(scice_results$ic), 4)),
-    paste("- Mean IC score:", round(mean(scice_results$ic), 4)),
-    paste("- Median IC score:", round(median(scice_results$ic), 4))
-  )
+  finite_ic <- scice_results$ic[is.finite(scice_results$ic)]
+  if (length(finite_ic) > 0) {
+    ic_stats <- c(
+      paste("- Best IC score:", round(min(finite_ic), 4)),
+      paste("- Worst IC score:", round(max(finite_ic), 4)),
+      paste("- Mean IC score:", round(mean(finite_ic), 4)),
+      paste("- Median IC score:", round(median(finite_ic), 4))
+    )
+  } else {
+    ic_stats <- c(
+      "- Best IC score: NA",
+      "- Worst IC score: NA",
+      "- Mean IC score: NA",
+      "- Median IC score: NA"
+    )
+  }
   
   summary <- c(summary,
               "IC SCORE STATISTICS:",

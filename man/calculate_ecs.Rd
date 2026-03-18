@@ -16,7 +16,8 @@ calculate_ecs(cluster_a, cluster_b, d = 0.9, return_vector = FALSE)
 \item{return_vector}{Whether to return similarity scores for each cell (default: FALSE)}
 }
 \value{
-Either mean ECS score (if return_vector=FALSE) or vector of ECS scores for each cell
+Either scalar ECS score (if \code{return_vector = FALSE}) or vector
+  of ECS scores for each cell
 }
 \description{
 ECS calculates similarity between two clustering results based on how consistently 
@@ -36,7 +37,8 @@ It performs strict input validation before calling C++ routines from
 Labels are internally remapped to compact integer IDs to avoid numeric range
 issues in downstream routines while preserving partition structure.
 
-When \code{return_vector = FALSE}, the returned scalar ECS is computed as
-the mean of element-level scores (\code{element_sim_elscore}) for numerical
-stability on large cell counts.
+When \code{return_vector = FALSE}, the returned scalar ECS is the mean of the
+element-level scores from \code{ClustAssess::element_sim_elscore()}.
+This avoids the known negative-value bug in \code{ClustAssess::element_sim()}
+on very large flat partitions.
 }

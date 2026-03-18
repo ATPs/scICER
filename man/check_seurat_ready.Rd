@@ -4,12 +4,15 @@
 \alias{check_seurat_ready}
 \title{Check if Seurat object is ready for scICER analysis}
 \usage{
-check_seurat_ready(seurat_obj, graph_name = "snn")
+check_seurat_ready(seurat_obj, graph_name = NULL)
 }
 \arguments{
 \item{seurat_obj}{A Seurat object to validate}
 
-\item{graph_name}{Name of the graph to check for (default: "snn")}
+\item{graph_name}{Name of the graph to check for. If \code{NULL}, uses the
+default assay SNN graph name \code{<DefaultAssay>_snn}. For backward
+compatibility, \code{"snn"} also falls back to that assay-specific graph
+when present.}
 }
 \value{
 List with validation results and suggestions

@@ -20,7 +20,12 @@ The input should be the output of \code{extract_clustering_array()}, where
 \code{arr} contains unique clustering label vectors and \code{parr} contains
 their empirical probabilities.
 
-For each pair of unique clustering outcomes, MEI uses element-level ECS scores,
-weighted by the pair's probabilities, then aggregates across all pairs.
-Higher values indicate that a cell is assigned consistently across repeated runs.
+MEI is computed as the expected element-level ECS between two independent
+draws from the empirical clustering distribution. Diagonal self-match
+probability contributes a value of 1 for every cell, while off-diagonal pairs
+contribute the pairwise element-level ECS weighted by the product of their
+normalized probabilities.
+
+Higher values indicate that a cell is assigned consistently across repeated
+runs.
 }

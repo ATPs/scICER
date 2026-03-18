@@ -14,7 +14,8 @@ It covers:
 This description matches the code on `main` after the raw-cluster-aware
 resolution search and gamma-admission updates on 2026-03-17, the
 `plot_ic()` gamma-label placement update on 2026-03-17, and the manual
-`resolution` mode update on 2026-03-17.
+`resolution` mode update on 2026-03-17, plus the ECS/MEI correctness and
+Seurat readiness compatibility updates on 2026-03-18.
 
 ## 1.1 Current Source Layout
 
@@ -734,9 +735,12 @@ One-pass deterministic merge logic:
 
 ### 6.6 ECS/IC/MEI stack (`R/ecs_functions.R`)
 
-- `calculate_ecs()` uses ClustAssess element-level similarity,
+- `calculate_ecs()` uses `element_sim_elscore()` directly, returning either the
+  full per-cell vector or its mean for scalar ECS so very large inputs avoid
+  the negative-value bug in `ClustAssess::element_sim()`,
 - `calculate_ic_from_extracted()` computes probability-weighted pairwise similarity aggregate,
-- `calculate_mei_from_array()` computes per-cell stability from pairwise ECS.
+- `calculate_mei_from_array()` computes per-cell stability as the probability-weighted
+  expected element-level ECS over repeated clustering draws.
 
 ### 6.7 Parallel and runtime utilities (`R/clustering_runtime.R`)
 

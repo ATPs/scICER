@@ -1,4 +1,5 @@
 #' @importFrom methods as
+#' @importClassesFrom Matrix Matrix dgCMatrix sparseMatrix
 NULL
 
 #' Perform Leiden clustering on an igraph object

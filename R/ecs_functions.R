@@ -20,16 +20,18 @@ NULL
 #' Labels are internally remapped to compact integer IDs to avoid numeric range
 #' issues in downstream routines while preserving partition structure.
 #'
-#' When \code{return_vector = FALSE}, the returned scalar ECS is computed as
-#' the mean of element-level scores (\code{element_sim_elscore}) for numerical
-#' stability on large cell counts.
+#' When \code{return_vector = FALSE}, the returned scalar ECS is the mean of the
+#' element-level scores from \code{ClustAssess::element_sim_elscore()}.
+#' This avoids the known negative-value bug in \code{ClustAssess::element_sim()}
+#' on very large flat partitions.
 #'
 #' @param cluster_a First clustering result (vector of cluster assignments)
 #' @param cluster_b Second clustering result (vector of cluster assignments)
 #' @param d Damping parameter (default: 0.9)
 #' @param return_vector Whether to return similarity scores for each cell (default: FALSE)
 #'
-#' @return Either mean ECS score (if return_vector=FALSE) or vector of ECS scores for each cell
+#' @return Either scalar ECS score (if \code{return_vector = FALSE}) or vector
+#'   of ECS scores for each cell
 #' @export
 calculate_ecs <- function(cluster_a, cluster_b, d = 0.9, return_vector = FALSE) {
   valid_label_type <- c("numeric", "integer", "factor", "character")
@@ -78,13 +80,51 @@ calculate_ecs <- function(cluster_a, cluster_b, d = 0.9, return_vector = FALSE) 
   cluster_a <- compact_labels(cluster_a)
   cluster_b <- compact_labels(cluster_b)
 
-  # Scalar ECS must be computed from element-level scores for numerical stability
-  # on large cell counts.
   if (return_vector) {
     return(ClustAssess::element_sim_elscore(cluster_a, cluster_b, alpha = d))
   } else {
     return(mean(ClustAssess::element_sim_elscore(cluster_a, cluster_b, alpha = d)))
   }
+}
+
+normalize_clustering_array_input <- function(clustering_array) {
+  if (!is.list(clustering_array) ||
+      is.null(clustering_array$arr) ||
+      is.null(clustering_array$parr)) {
+    stop("clustering_array must be a list with `arr` and `parr` entries.")
+  }
+
+  clusterings <- clustering_array$arr
+  probabilities <- as.numeric(clustering_array$parr)
+
+  if (length(clusterings) == 0L) {
+    stop("clustering_array$arr must contain at least one clustering.")
+  }
+  if (length(probabilities) != length(clusterings)) {
+    stop("clustering_array$parr must have the same length as clustering_array$arr.")
+  }
+  if (any(!is.finite(probabilities)) || any(probabilities < 0)) {
+    stop("clustering_array$parr must contain finite non-negative weights.")
+  }
+
+  n_cells_each <- vapply(clusterings, length, integer(1))
+  if (any(n_cells_each == 0L)) {
+    stop("Each clustering in clustering_array$arr must be non-empty.")
+  }
+  if (length(unique(n_cells_each)) != 1L) {
+    stop("All clusterings in clustering_array$arr must have the same length.")
+  }
+
+  total_weight <- sum(probabilities)
+  if (!is.finite(total_weight) || total_weight <= 0) {
+    stop("clustering_array$parr must sum to a positive value.")
+  }
+
+  list(
+    arr = clusterings,
+    parr = probabilities / total_weight,
+    n_cells = n_cells_each[[1]]
+  )
 }
 
 #' Extract unique clustering arrays and their probabilities
@@ -135,44 +175,39 @@ extract_clustering_array <- function(clustering_matrix) {
 #' \code{arr} contains unique clustering label vectors and \code{parr} contains
 #' their empirical probabilities.
 #'
-#' For each pair of unique clustering outcomes, MEI uses element-level ECS scores,
-#' weighted by the pair's probabilities, then aggregates across all pairs.
-#' Higher values indicate that a cell is assigned consistently across repeated runs.
+#' MEI is computed as the expected element-level ECS between two independent
+#' draws from the empirical clustering distribution. Diagonal self-match
+#' probability contributes a value of 1 for every cell, while off-diagonal pairs
+#' contribute the pairwise element-level ECS weighted by the product of their
+#' normalized probabilities.
+#'
+#' Higher values indicate that a cell is assigned consistently across repeated
+#' runs.
 #'
 #' @param clustering_array Result from extract_clustering_array
 #' @return Vector of MEI scores
 #' @export
 calculate_mei_from_array <- function(clustering_array) {
-  if (length(clustering_array$arr) == 1) {
-    return(rep(1, length(clustering_array$arr[[1]])))
+  normalized <- normalize_clustering_array_input(clustering_array)
+  clusterings <- normalized$arr
+  probabilities <- normalized$parr
+  n_clusterings <- length(clusterings)
+  n_cells <- normalized$n_cells
+
+  if (n_clusterings == 1L) {
+    return(rep(1, n_cells))
   }
-  
-  n_clusterings <- length(clustering_array$arr)
-  n_cells <- length(clustering_array$arr[[1]])
-  
-  # Calculate pairwise similarities
-  similarity_matrix <- matrix(0, nrow = n_clusterings, ncol = n_clusterings)
-  
+
+  mei_scores <- rep(sum(probabilities^2), n_cells)
+
   for (i in 1:(n_clusterings - 1)) {
     for (j in (i + 1):n_clusterings) {
-      sim_scores <- calculate_ecs(
-        clustering_array$arr[[i]], 
-        clustering_array$arr[[j]], 
-        return_vector = TRUE
-      )
-      weighted_scores <- sim_scores * (clustering_array$parr[i] + clustering_array$parr[j])
-      similarity_matrix[i, j] <- mean(weighted_scores)
-      similarity_matrix[j, i] <- similarity_matrix[i, j]
+      sim_scores <- calculate_ecs(clusterings[[i]], clusterings[[j]], return_vector = TRUE)
+      mei_scores <- mei_scores + (2 * probabilities[[i]] * probabilities[[j]] * sim_scores)
     }
   }
-  
-  # Set diagonal to 1
-  diag(similarity_matrix) <- 1
-  
-  # Calculate MEI as row sums divided by (n_clusterings - 1)
-  mei_scores <- rowSums(similarity_matrix) / (n_clusterings - 1)
-  
-  return(mei_scores)
+
+  mei_scores
 }
 
 #' Calculate Inconsistency (IC) score from extracted clustering results
@@ -211,9 +246,9 @@ calculate_ic <- function(clustering_array) {
 #'
 #' @keywords internal
 calculate_ic_from_extracted <- function(clustering_array) {
-  unique_clusterings <- clustering_array$arr
-  probabilities <- clustering_array$parr
-  
+  normalized <- normalize_clustering_array_input(clustering_array)
+  unique_clusterings <- normalized$arr
+  probabilities <- normalized$parr
   n_clusterings <- length(unique_clusterings)
   
   if (n_clusterings == 1) {
@@ -258,7 +293,8 @@ calculate_ic_from_extracted <- function(clustering_array) {
 #' @return Best clustering labels
 #' @keywords internal
 get_best_clustering <- function(clustering_array) {
-  unique_clusterings <- clustering_array$arr
+  normalized <- normalize_clustering_array_input(clustering_array)
+  unique_clusterings <- normalized$arr
   n_clusterings <- length(unique_clusterings)
   
   if (n_clusterings == 1) {

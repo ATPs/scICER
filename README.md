@@ -389,7 +389,7 @@ In `resolution` mode, `resolution_diagnostics` keeps one row per input gamma, wh
 
 ```r
 # Get recommended parameters based on dataset size
-recommended <- get_recommended_parameters(seurat_obj)
+recommended <- get_recommended_parameters(ncol(large_seurat_obj))
 
 # Optimized settings for large datasets
 results <- scICE_clustering(
@@ -533,7 +533,7 @@ if (requireNamespace("leiden", quietly = TRUE)) {
 check_seurat_ready(seurat_obj)
 
 # Get recommended parameters
-params <- get_recommended_parameters(seurat_obj)
+params <- get_recommended_parameters(ncol(seurat_obj))
 ```
 
 ## Citation
@@ -542,7 +542,7 @@ If you use scICER in your research, please cite:
 
 ```
 Cao, X. (2024). scICER: Single-cell Inconsistency-based Clustering Evaluation in R. 
-R package version 1.0.0. https://github.com/ATPs/scICER
+R package version 1.1.0. https://github.com/ATPs/scICER
 ```
 
 *The original scICE algorithm citation will be added upon publication*

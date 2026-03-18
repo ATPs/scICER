@@ -1,1 +1,8 @@
 ^install\.R$
+^install_and_test\.R$
+^AGENTS\.md$
+^design\.md$
+^LICENSE\.md$
+^examples$
+^tests/test\.large\.R$
+^tests/test\.resolution\.R$

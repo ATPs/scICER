@@ -1,3 +1,14 @@
+# scICER 1.1.0
+
+## Fixes and Improvements
+
+* Kept `calculate_ecs()` scalar mode on the stable `mean(ClustAssess::element_sim_elscore(...))` path to avoid negative values from `ClustAssess::element_sim()` on very large inputs.
+* Fixed `calculate_mei_from_array()` to return probability-weighted per-cell scores instead of clustering-level summaries.
+* Made `calculate_ic()` and related helpers normalize non-unit clustering weights defensively.
+* Updated `check_seurat_ready()` to support Seurat v4/v5 assay accessors, infer the default assay graph, and keep backward compatibility for `"snn"`.
+* Prevented manual large-data scripts in `tests/` from running during package build/check unless `SCICER_RUN_MANUAL_TESTS=true`.
+* Cleaned package metadata for build/install by removing unused imports and excluding repository-only files from source builds.
+
 # scICER 1.0.0
 
 ## Major Features
