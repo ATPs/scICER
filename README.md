@@ -394,6 +394,33 @@ results <- scICE_clustering(
 )
 ```
 
+### For Very Large Seurat Objects
+
+For very large input Seurat objects, do **not** start with the default
+`n_trials = 15` and `n_bootstrap = 100`. They can make the run unnecessarily
+slow. Start with much smaller values and increase only if you need a more
+careful stability estimate.
+
+```r
+# Suggested starting point for very large Seurat objects
+results <- scICE_clustering(
+  object = very_large_seurat_obj,
+  graph_name = "RNA_snn",
+  cluster_range = 5:10,      # Keep the range focused
+  n_trials = 4,              # Strongly reduced from the default 15
+  n_bootstrap = 20,          # Strongly reduced from the default 100
+  n_workers = max(1, parallel::detectCores() - 2),
+  min_cluster_size = 2,
+  remove_threshold = Inf,
+  seed = 42,
+  verbose = TRUE
+)
+```
+
+If this is still too slow, reduce `cluster_range` further or test a small set
+of user-provided `resolution` values directly instead of scanning a wide target
+cluster range.
+
 ### Memory Management
 
 - Reduce `n_trials` and `n_bootstrap` for memory-limited systems
