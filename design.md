@@ -16,7 +16,36 @@ resolution search and gamma-admission updates on 2026-03-17, the
 `plot_ic()` gamma-label placement update on 2026-03-17, and the manual
 `resolution` mode update on 2026-03-17.
 
-## 1.1 Visualization Note
+## 1.1 Current Source Layout
+
+The implementation is now split across several focused files in `R/`:
+
+- `R/scICE_main.R`: exported entry point `scICE_clustering()`, input validation,
+  top-level mode selection, and manual `resolution` orchestration via
+  `build_manual_resolution_results()`.
+- `R/clustering_core.R`: `cluster_range`-mode orchestration in
+  `clustering_main()`, including filtering, optimization scheduling, and result
+  assembly.
+- `R/clustering_resolution_search.R`: resolution-range search logic and
+  effective/raw cluster-count helpers used during target-`k` search.
+- `R/clustering_optimization.R`: intensive optimization for target `k`,
+  fixed-gamma evaluation for manual `resolution`, bootstrap finalization, and
+  final label selection/merge helpers.
+- `R/clustering_runtime.R`: cache management, cross-platform parallel wrappers,
+  heartbeat logging helpers, and memory/spill utilities.
+- `R/leiden_wrapper.R`: low-level Leiden wrapper and sparse-graph to `igraph`
+  conversion.
+- `R/ecs_functions.R`: ECS/IC/MEI scoring functions.
+- `R/visualization.R`: plotting and result-extraction helpers such as
+  `plot_ic()` and `get_robust_labels()`.
+- `R/utils.R`: reporting helpers such as `create_results_summary()`.
+- `R/logging_utils.R`: timestamped log formatter `scice_message()`.
+
+When reading the rest of this document, treat behavior sections as logical
+workflow descriptions and the file list above as the current physical code
+organization.
+
+## 1.2 Visualization Note
 
 - `plot_ic(..., show_gamma = TRUE)` now renders gamma values directly under each
   x-axis cluster label as a two-line tick label and rotates the x-axis text by
@@ -54,6 +83,14 @@ resolution search and gamma-admission updates on 2026-03-17, the
 In `resolution` mode, all requested gamma values are stored in
 `resolution_diagnostics`, but the main result object is deduplicated by final
 cluster number so each returned `n_cluster` keeps only the lowest-IC gamma.
+
+More concretely, `resolution` mode is a fixed-gamma evaluation path, not a
+target-`k` replay path. The code first removes duplicated gamma values, then
+evaluates each remaining gamma directly, stores one diagnostic row per gamma in
+`resolution_diagnostics`, and finally keeps only the lowest-IC gamma for each
+final cluster number in the main result object. This means
+`resolution = old_results$gamma` does not imply a one-to-one replay of the
+original `cluster_range` run. See `### 5.3.1 Manual Resolution Workflow`.
 
 Important: current implementation uses **effective cluster counting** when `min_cluster_size > 1`.
 
@@ -129,11 +166,15 @@ scICE_clustering(
 - Type: single numeric value or numeric vector.
 - Priority: if `resolution` is provided, `cluster_range` is ignored and a user
   message is emitted.
+- Current behavior summary: fixed-gamma evaluation +
+  per-final-cluster deduplication; the main result object is not returned
+  one-row-per-input-gamma.
 - Used by:
   - direct repeated Leiden evaluation for each supplied gamma,
   - per-gamma IC/bootstrap diagnostics,
   - per-final-cluster deduplication of the main result object.
 - Result behavior:
+  - duplicated gamma values are removed before evaluation,
   - `resolution_diagnostics` keeps one row per supplied gamma,
   - the main `scICE` result keeps one row per final cluster number, selecting
     the gamma with the lowest IC score for that cluster number.
@@ -289,7 +330,16 @@ Returned list fields (main ones):
 - `k`: alias/metadata for iteration count.
 - `excluded`, `exclusion_reason`: filtering metadata.
 - `cell_names`: cells from input Seurat object.
-- `cluster_range_tested`: original requested `cluster_range`.
+- `analysis_mode`: `"cluster_range"` or `"resolution"`.
+- `resolution_input`: manual gamma values supplied by the user in `resolution`
+  mode.
+- `resolution_diagnostics`: per-gamma diagnostics table in `resolution` mode.
+- `best_cluster`, `best_resolution`: global lowest-IC cluster number and its
+  retained gamma in the returned object.
+- `cluster_range_tested`: original requested `cluster_range` in
+  `cluster_range` mode; in `resolution` mode the current implementation writes
+  the retained `n_cluster` values after per-final-cluster deduplication, not a
+  user-supplied cluster range.
 - `consistent_clusters`: subset of `n_cluster` with `ic < ic_threshold`.
 - `graph_name`, `min_cluster_size`: run metadata.
 
@@ -305,10 +355,18 @@ Main responsibilities:
 4. create runtime context (memory/spill settings),
 5. extract graph from Seurat,
 6. call `graph_to_igraph()`,
-7. call `clustering_main()`,
+7. branch into one of two clustering paths:
+   - `resolution` mode: call `build_manual_resolution_results()` directly,
+   - `cluster_range` mode: call `clustering_main()`,
 8. post-process consistency summary and attach metadata.
 
-### 5.2 Graph Conversion: `graph_to_igraph()`
+Current file ownership:
+
+- `scICE_clustering()` and `build_manual_resolution_results()` live in
+  `R/scICE_main.R`.
+- `clustering_main()` lives in `R/clustering_core.R`.
+
+### 5.2 Graph Conversion: `graph_to_igraph()` (`R/leiden_wrapper.R`)
 
 Key behavior:
 
@@ -321,7 +379,7 @@ Why this matters:
 - large datasets spend non-trivial time here,
 - conversion preserves the graph structure fed to Leiden.
 
-### 5.3 Core Orchestration: `clustering_main()`
+### 5.3 Core Orchestration: `clustering_main()` (`R/clustering_core.R`)
 
 Stages:
 
@@ -340,7 +398,59 @@ Stages:
    - winning admission family,
    - raw cluster count before final merge.
 
-### 5.4 Resolution Search: `find_resolution_ranges()`
+### 5.3.1 Manual Resolution Workflow (`R/scICE_main.R` + `R/clustering_optimization.R`)
+
+When users provide a numeric `resolution` value or vector, `scICE_clustering()`
+does not enter the `cluster_range` search/optimization path. Instead, it runs
+the following fixed-gamma workflow:
+
+1. Enter `resolution` mode and skip `cluster_range`-based resolution search.
+2. If the caller also supplied `cluster_range`, ignore it and emit a user-facing
+   message.
+3. If the `resolution` vector contains duplicated gamma values, remove the
+   duplicates before evaluation.
+4. Split the available worker budget across the supplied gamma values:
+   - choose the number of active outer resolution workers from the number of
+     gamma values and the global `n_workers` budget,
+   - give each active gamma worker a derived per-gamma trial/bootstrap worker
+     budget.
+5. For each remaining gamma, call `evaluate_fixed_resolution()`:
+   - derive a deterministic seed from the user seed and the numeric gamma value,
+   - run `n_trials` Leiden calls at that fixed gamma,
+   - compute median effective cluster count and median raw cluster count across
+     the trial matrix,
+   - compute the phase-1 IC value from all trial labels at that gamma,
+   - run bootstrap IC evaluation on the stored clustering matrix,
+   - choose one representative `best_labels` solution from the trial matrix,
+   - record both `best_labels_raw_cluster_count` and
+     `best_labels_final_cluster_count`.
+6. Store one row per evaluated gamma in `resolution_diagnostics`. This table is
+   the complete per-gamma record for manual `resolution` mode.
+7. Build the main returned `scICE` object by grouping evaluated gamma values by
+   `best_labels_final_cluster_count`:
+   - if multiple gamma values land on the same final cluster number, keep only
+     the gamma with the lowest IC score in the main result,
+   - keep superseded gamma values only in `resolution_diagnostics`.
+8. Attach manual-resolution metadata to the returned object:
+   - `analysis_mode = "resolution"`
+   - `resolution_input`
+   - `resolution_diagnostics`
+   - `best_cluster`
+   - `best_resolution`
+
+Important note:
+
+- `resolution` mode does not run the `cluster_range` path's gamma-admission
+  ladder.
+- `resolution` mode does not run the multi-gamma Phase 4 iterative refinement
+  used by `optimize_clustering()`.
+- Therefore, even if users pass gamma values extracted from a previous
+  `cluster_range` run, the output is not guaranteed to match that earlier run.
+- The difference is not only due to seed derivation; it also comes from the
+  different control flow and the final per-cluster deduplication step in manual
+  `resolution` mode.
+
+### 5.4 Resolution Search: `find_resolution_ranges()` (`R/clustering_resolution_search.R`)
 
 Goal: find `[left_bound, right_bound]` gamma range for each target `k` while
 avoiding high-gamma regimes where raw clusters explode but effective clusters
@@ -433,7 +543,7 @@ Additional details:
 - Adjacent cluster ranges are still nudged apart when they nearly overlap.
 - Final return value is a named list `{k -> c(left, right)}` on the actual gamma scale.
 
-### 5.5 Optional Filtering Stage (inside `clustering_main()`)
+### 5.5 Optional Filtering Stage (inside `clustering_main()` in `R/clustering_core.R`)
 
 - skipped entirely when `remove_threshold = Inf`.
 - otherwise:
@@ -445,7 +555,7 @@ Result:
 
 - excluded targets are retained as metadata entries (`excluded = TRUE`) but not optimized.
 
-### 5.6 Intensive Optimization: `optimize_clustering()`
+### 5.6 Intensive Optimization: `optimize_clustering()` (`R/clustering_optimization.R`)
 
 This is the most expensive part.
 
@@ -552,24 +662,43 @@ Returned fields include:
 
 ## 6. Internal Helpers and Their Roles
 
-### 6.1 `leiden_clustering()`
+This section is organized by logical helper role, but the current physical file
+split is:
+
+- graph and Leiden wrappers: `R/leiden_wrapper.R`
+- resolution-search helpers: `R/clustering_resolution_search.R`
+- optimization/finalization helpers: `R/clustering_optimization.R`
+- runtime/cache/parallel helpers: `R/clustering_runtime.R`
+- ECS/IC/MEI helpers: `R/ecs_functions.R`
+- downstream reporting/plotting helpers: `R/utils.R` and `R/visualization.R`
+
+### 6.1 `leiden_clustering()` (`R/leiden_wrapper.R`)
 
 - wrapper over `igraph::cluster_leiden()`.
 - passes edge weights when present.
 - returns **0-based integer labels**.
 - CPM/modularity branch selected by `objective_function`.
 
-### 6.2 `cached_leiden_clustering()`
+### 6.2 `cached_leiden_clustering()` (`R/clustering_runtime.R`)
 
 - process-local cache keyed by resolution/objective/iterations/beta/suffix.
 - avoids repeated identical Leiden computations.
 
-### 6.3 `count_effective_clusters()`
+### 6.3 `count_effective_clusters()` (`R/clustering_resolution_search.R`)
 
 - counts clusters with size `>= min_cluster_size`.
 - all-small scenario returns `0`.
 
 ### 6.4 Raw-count guard and search helpers
+
+Current locations:
+
+- `raw_cluster_guard_limits()`, `raw_cluster_search_upper()`,
+  `build_gamma_sequence_for_range()`, `classify_resolution_search_state()`,
+  and `clamp_gamma_range_to_raw_plateau()` are in
+  `R/clustering_resolution_search.R`.
+- `select_gamma_admission()` and `refine_gamma_candidates_by_raw_gap()` are in
+  `R/clustering_optimization.R`.
 
 - `raw_cluster_guard_limits()`:
   - defines optimization-stage raw-cluster ceilings:
@@ -590,7 +719,7 @@ Returned fields include:
 - `refine_gamma_candidates_by_raw_gap()`:
   - breaks ties by keeping gammas with the minimum raw-median gap to target.
 
-### 6.5 `merge_small_clusters_to_neighbors()`
+### 6.5 `merge_small_clusters_to_neighbors()` (`R/clustering_optimization.R`)
 
 One-pass deterministic merge logic:
 
@@ -603,13 +732,13 @@ One-pass deterministic merge logic:
    - tie-break by smallest target ID.
 4. relabel to contiguous 0-based IDs.
 
-### 6.6 ECS/IC/MEI stack
+### 6.6 ECS/IC/MEI stack (`R/ecs_functions.R`)
 
 - `calculate_ecs()` uses ClustAssess element-level similarity,
 - `calculate_ic_from_extracted()` computes probability-weighted pairwise similarity aggregate,
 - `calculate_mei_from_array()` computes per-cell stability from pairwise ECS.
 
-### 6.7 Parallel and runtime utilities
+### 6.7 Parallel and runtime utilities (`R/clustering_runtime.R`)
 
 - `cross_platform_mclapply()`:
   - `mclapply` on Unix and `lapply` on Windows,
@@ -726,34 +855,47 @@ These are not part of the public stable API, but are useful for profiling and la
 
 ```text
 scICE_clustering
+  -> validate inputs / create runtime_context
   -> graph_to_igraph
-  -> clustering_main
-       -> find_resolution_ranges
-            -> run_preliminary_trials
-                 -> run_single_trial_count
-                      -> cached_leiden_clustering
-                           -> leiden_clustering
-                      -> count_effective_clusters
-            -> classify_resolution_search_state
-            -> build_gamma_sequence_for_range
-            -> clamp_gamma_range_to_raw_plateau
-       -> (optional) filtering stage
-       -> optimize_clustering (per k)
-            -> evaluate_gamma
-                 -> run_leiden_trial
-                      -> leiden_clustering
+  -> if resolution is provided:
+       -> build_manual_resolution_results
+            -> evaluate_fixed_resolution (per gamma)
+                 -> leiden_clustering
                  -> count_effective_clusters
-                 -> passes_raw_cluster_guard
                  -> extract_clustering_array
                  -> calculate_ic_from_extracted
                       -> calculate_ecs
-            -> select_gamma_admission
-            -> refine_gamma_candidates_by_raw_gap
-            -> iterative refinement (optional)
-            -> bootstrap IC
-            -> get_best_clustering
-            -> merge_small_clusters_to_neighbors
-       -> calculate_mei_from_array
-            -> calculate_ecs
+                 -> bootstrap IC via finalize_selected_clustering
+                 -> get_best_clustering
+                 -> merge_small_clusters_to_neighbors
+  -> else:
+       -> clustering_main
+            -> find_resolution_ranges
+                 -> run_preliminary_trials
+                      -> run_single_trial_count
+                           -> cached_leiden_clustering
+                                -> leiden_clustering
+                           -> count_effective_clusters
+                 -> classify_resolution_search_state
+                 -> build_gamma_sequence_for_range
+                 -> clamp_gamma_range_to_raw_plateau
+            -> (optional) filtering stage
+            -> optimize_clustering (per k)
+                 -> evaluate_gamma
+                      -> run_leiden_trial
+                           -> leiden_clustering
+                      -> count_effective_clusters
+                      -> passes_raw_cluster_guard
+                      -> extract_clustering_array
+                      -> calculate_ic_from_extracted
+                           -> calculate_ecs
+                 -> select_gamma_admission
+                 -> refine_gamma_candidates_by_raw_gap
+                 -> iterative refinement (optional)
+                 -> bootstrap IC
+                 -> get_best_clustering
+                 -> merge_small_clusters_to_neighbors
+            -> calculate_mei_from_array
+                 -> calculate_ecs
   -> consistency post-processing (ic_threshold)
 ```

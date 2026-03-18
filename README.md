@@ -159,6 +159,18 @@ for (n in 3:15) {
 cowplot::plot_grid(plotlist = xl.fig, ncol = 3)
 ```
 
+### Documentation Notes
+
+- `README.md`: quick installation, common usage patterns, and practical examples.
+- [`design.md`](./design.md): implementation-oriented design document for
+  `scICE_clustering()`. It explains the full workflow, parameter semantics,
+  output fields, and important behavior differences between `cluster_range`
+  mode and manual `resolution` mode.
+- Use [`design.md`](./design.md) when you need to understand how results are
+  produced internally, interpret fields such as `resolution_diagnostics`, or
+  understand why `resolution = old_results$gamma` is not a one-to-one replay of
+  a previous `cluster_range` run.
+
 ### Background Runs and Verbose Logs
 
 `scICE_clustering(..., verbose = TRUE)` prints timestamped progress messages like
@@ -491,6 +503,7 @@ This package is licensed under the MIT License. See [LICENSE](LICENSE) file for 
 
 ## Related Resources
 
+- 📘 [Internal design document](./design.md)
 - 📚 [Seurat Documentation](https://satijalab.org/seurat/)
 - 🔬 [Original scICE (Julia)](https://github.com/Mathbiomed/scICE)
 - 📖 [Single-cell Analysis Best Practices](https://www.sc-best-practices.org/) 
