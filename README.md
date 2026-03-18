@@ -235,7 +235,17 @@ It's OK to set a large `remove_threshold` value, because `plot_ic` and `get_robu
 ### 3. Manual Resolution Mode
 
 ```r
-# Directly evaluate user-chosen gamma values
+# Evaluate one user-provided gamma
+result_single_resolution <- scICE_clustering(
+  object = your_seurat_object,
+  resolution = 0.2,
+  n_trials = 15,
+  n_bootstrap = 100,
+  min_cluster_size = 2,
+  seed = 42
+)
+
+# Evaluate several user-provided gamma values
 results_manual <- scICE_clustering(
   object = your_seurat_object,
   resolution = c(0.1, 0.2, 0.4, 0.8),
@@ -245,12 +255,26 @@ results_manual <- scICE_clustering(
   seed = 42
 )
 
-# Per-gamma diagnostics
+# Plot the retained results
+plot_ic(results_manual, threshold = 1.005)
+
+# Per-gamma diagnostics for all user-supplied resolutions
 results_manual$resolution_diagnostics
 
 # Lowest-IC returned solution
 results_manual$best_cluster
 results_manual$best_resolution
+
+# resolution takes priority if cluster_range is also supplied
+results_manual2 <- scICE_clustering(
+  object = your_seurat_object,
+  cluster_range = 3:10,
+  resolution = c(0.15, 0.3, 0.6),
+  n_trials = 15,
+  n_bootstrap = 100,
+  min_cluster_size = 2,
+  seed = 42
+)
 ```
 
 ### 4. Visualization and Results
