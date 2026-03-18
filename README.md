@@ -180,12 +180,20 @@ If you launch jobs in the background and only capture `stdout`, logs can appear 
 Use:
 
 ```bash
-Rscript examples/run_scice.R > scice.log 2>&1 &
+Rscript examples/run_scice.R --help
+Rscript examples/run_scice.R --input_qs input.qs --output_qs augmented_with_scice.qs > scice.log 2>&1 &
 tail -f scice.log
 ```
 
 For very large input objects, `qs::qread()` can be silent for a while before scICER starts.
-The provided `run_scice.R` script prints timestamped checkpoints before and after `qread()` and clustering.
+The provided `run_scice.R` script prints timestamped checkpoints before and after
+each major step, builds a lightweight Seurat object that keeps only one feature
+plus the requested graph for the clustering phase, deletes the original large
+object before `scICE_clustering()`, then reloads the original object only for
+metadata merge. The final augmented Seurat object is saved with `qs`.
+The script accepts both environment variables and explicit CLI flags such as
+`--qread_threads`, `--n_workers`, `--cluster_range`, and `--resolution`.
+If `--output_qs` is omitted, it defaults to `--input_qs`.
 
 ## Detailed Usage
 
@@ -396,30 +404,82 @@ results <- scICE_clustering(
 
 ### For Very Large Seurat Objects
 
-For very large input Seurat objects, do **not** start with the default
-`n_trials = 15` and `n_bootstrap = 100`. They can make the run unnecessarily
-slow. Start with much smaller values and increase only if you need a more
-careful stability estimate.
+For very large Seurat objects, the biggest avoidable memory cost is keeping the
+full object in memory during the entire scICER run. `scICE_clustering()` only
+needs the graph and cell names, so a practical pattern is:
+
+1. read the original object with `qs::qread()`;
+2. build a lightweight Seurat object that keeps only one feature plus the target graph;
+3. remove the original object and run `gc()` before clustering;
+4. run `scICE_clustering()` on the lightweight object;
+5. reload the original object and add the chosen labels back with `get_robust_labels()`;
+6. save both the results object and the augmented Seurat object with `qs::qsave()`.
 
 ```r
-# Suggested starting point for very large Seurat objects
+library(Seurat)
+library(scICER)
+library(qs)
+
+input_qs <- "/path/to/very_large_object.qs"
+graph_name <- "RNA_snn"
+qread_threads <- 40
+
+full_obj <- qs::qread(input_qs, nthread = qread_threads)
+
+# Keep one feature plus the graph so the clustering phase does not hold the
+# full assay/reduction payload in memory.
+assay_name <- DefaultAssay(full_obj)
+keep_feature <- rownames(full_obj[[assay_name]])[1]
+small_obj <- DietSeurat(
+  object = full_obj,
+  assays = assay_name,
+  graphs = graph_name,
+  dimreducs = NULL,
+  features = keep_feature,
+  misc = FALSE
+)
+
+rm(full_obj)
+gc()
+
 results <- scICE_clustering(
-  object = very_large_seurat_obj,
-  graph_name = "RNA_snn",
-  cluster_range = 5:10,      # Keep the range focused
-  n_trials = 4,              # Strongly reduced from the default 15
-  n_bootstrap = 20,          # Strongly reduced from the default 100
-  n_workers = max(1, parallel::detectCores() - 2),
-  min_cluster_size = 2,
+  object = small_obj,
+  graph_name = graph_name,
+  cluster_range = 4:5,       # Keep the range focused for huge objects
+  n_trials = 4,              # Start small and increase only if needed
+  n_bootstrap = 20,
+  n_workers = 40,
   remove_threshold = Inf,
-  seed = 42,
+  seed = 123,
   verbose = TRUE
 )
+
+rm(small_obj)
+gc()
+
+full_obj <- qs::qread(input_qs, nthread = qread_threads)
+full_obj <- get_robust_labels(
+  results,
+  return_seurat = TRUE,
+  object = full_obj,
+  threshold = 1.01
+)
+
+qs::qsave(results, "scice_results.qs", preset = "balanced")
+qs::qsave(full_obj, "very_large_object_with_scice.qs", preset = "balanced")
 ```
 
 If this is still too slow, reduce `cluster_range` further or test a small set
 of user-provided `resolution` values directly instead of scanning a wide target
-cluster range.
+cluster range. For the bundled background script, you can switch to manual
+resolution mode without editing the file:
+
+```bash
+SCICE_RESOLUTION=0.01,0.02 \
+SCICE_N_TRIALS=2 \
+SCICE_N_BOOTSTRAP=10 \
+Rscript examples/run_scice.R --input_qs input.qs --output_qs augmented_with_scice.qs
+```
 
 ### Memory Management
 
