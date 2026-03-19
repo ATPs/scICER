@@ -204,8 +204,10 @@ scICE_clustering(
   - scICER expands coverage only on the gamma axis via a shared sweep,
   - for `CPM`, the sweep no longer starts with a fixed visible upper bound of
     `exp(20)`; it first performs an upper-cap discovery pass that grows gamma
-    by a narrower `x4` geometric ladder in parallel batches (up to 6 probes
-    per discovery round) until the requested final maximum is covered, two
+    by adaptive geometric batches in parallel (up to 6 probes per discovery
+    round when still far from the requested final maximum, then narrowing to
+    smaller `x2` / `x1.5` batches as the observed final count approaches the
+    requested maximum) until the requested final maximum is covered, two
     consecutive high-gamma degenerate probes are seen after a non-degenerate
     region, or the internal hard cap is hit,
   - the first coarse sweep oversubscribes probe count relative to available
@@ -637,8 +639,19 @@ This is the most expensive part.
 
 #### 5.6.1 Phase 1: evaluate gamma sequence
 
-- build gamma sequence with the shared helper `build_gamma_sequence_for_range()`
-  (typically 11 steps, or 5 for narrow large-graph cases),
+- build a two-stage gamma budget:
+  - `primary_gammas`: at most 8 values,
+  - `secondary_gammas`: at most 4 additional values,
+  - total Phase-1 gamma count cap: 12,
+- `primary_gammas` are assembled from:
+  - interval anchors (`gamma_left`, `gamma_right`),
+  - the target-specific selected search gamma,
+  - exact-hit search probes,
+  - near-hit search probes (`abs(final_cluster_count - k) <= 1`),
+  - evenly spaced interior fill points,
+- `secondary_gammas` are only generated when the primary batch is insufficient,
+  and are placed at the largest uncovered gaps in the current gamma grid,
+- for CPM, near-duplicate search seeds are thinned in log-space before budgeting,
 - for each gamma:
   - run `n_trials` Leiden calls (`run_leiden_trial()` -> `leiden_clustering()`),
   - compute:
@@ -662,6 +675,16 @@ Phase-1 IC rule:
 
 - if **none** of the four admission flags pass, mark the gamma invalid and skip IC,
 - otherwise compute IC from **all trials** at that gamma and keep the full trial matrix.
+
+Primary/secondary execution rule:
+
+- evaluate `primary_gammas` first,
+- stop immediately if the primary batch already yields:
+  - any guarded family (`raw_strict_soft`, `strict_soft`, `relaxed_soft`,
+    `strict_hard`, `relaxed_hard`), or
+  - any gamma with at least one exact final-hit trial,
+- only evaluate `secondary_gammas` when the primary batch has no admitted
+  candidates or only reaches an unguarded fallback family.
 
 #### 5.6.2 Phase 2: target-count filtering
 
@@ -690,7 +713,8 @@ Tie refinement:
 - if the winning family contains multiple gammas and `min_cluster_size > 1`,
   keep only the gammas with the smallest raw-median gap to the target.
 
-If all families are empty, optimization returns `NULL`.
+If all families are empty, optimization returns an explicit
+`optimization_admission_failed` result.
 
 #### 5.6.3 Phase 3: best gamma selection
 
@@ -708,7 +732,17 @@ Triggered when best IC is not perfect and multiple gammas remain:
 - increase iteration budget by `delta_n = 2`,
 - warm-start Leiden from previous memberships,
 - keep stable/better gammas,
-- stop on convergence criteria or `max_iterations`.
+- skip entirely when:
+  - admitted gamma count `<= 2`,
+  - `best_ic <= 1.005`,
+  - and there is at least one exact-hit gamma,
+- cap iterations by admission mode:
+  - `relaxed_unguarded` / `raw_relaxed_unguarded`: at most 2 rounds,
+  - all other modes: at most 3 rounds,
+- cap survivors after each round:
+  - after round 1: keep at most 4 gammas,
+  - after round 2+: keep at most 2 gammas,
+- stop on convergence criteria, iteration cap, or `max_iterations`.
 
 #### 5.6.5 Phase 5: bootstrap
 
@@ -734,7 +768,19 @@ Returned fields include:
 - selected effective/raw medians,
 - admission family metadata,
 - raw cluster count before final merge,
-- IC statistics and iteration metadata.
+- IC statistics and iteration metadata,
+- per-target optimization diagnostics:
+  - `phase1_primary_gamma_count`,
+  - `phase1_secondary_gamma_count`,
+  - `phase1_total_gamma_count`,
+  - `phase1_elapsed_sec`,
+  - `phase1_leiden_runs`,
+  - `secondary_phase1_used`,
+  - `exact_hit_gamma_count`,
+  - `phase4_iterations`,
+  - `phase4_elapsed_sec`,
+  - `phase5_elapsed_sec`,
+  - `optimization_elapsed_sec`.
 
 ## 6. Internal Helpers and Their Roles
 

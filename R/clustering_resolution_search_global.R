@@ -57,6 +57,44 @@ build_cpm_discovery_batch_gamma_values <- function(current_gamma, hard_cap_gamma
   )))
 }
 
+derive_cpm_discovery_batch_plan <- function(active_probe_workers, requested_max,
+                                            frontier_final_cluster_count = NA_real_) {
+  max_batch_size <- min(max(1L, as.integer(active_probe_workers)), 6L)
+  default_plan <- list(batch_size = max_batch_size, step_ratio = 4)
+
+  if (!is.finite(frontier_final_cluster_count) ||
+      !is.finite(requested_max) ||
+      requested_max <= 0) {
+    return(default_plan)
+  }
+
+  coverage_ratio <- as.numeric(frontier_final_cluster_count) / as.numeric(requested_max)
+  if (!is.finite(coverage_ratio)) {
+    return(default_plan)
+  }
+
+  if (coverage_ratio >= 0.9) {
+    return(list(
+      batch_size = min(max_batch_size, 2L),
+      step_ratio = 1.5
+    ))
+  }
+  if (coverage_ratio >= 0.75) {
+    return(list(
+      batch_size = min(max_batch_size, 2L),
+      step_ratio = 2
+    ))
+  }
+  if (coverage_ratio >= 0.5) {
+    return(list(
+      batch_size = min(max_batch_size, 3L),
+      step_ratio = 2
+    ))
+  }
+
+  default_plan
+}
+
 stabilize_monotone_probe_counts <- function(values) {
   values <- as.numeric(values)
   finite_indices <- which(is.finite(values))
@@ -410,23 +448,27 @@ discover_cpm_upper_gamma <- function(igraph_obj, gamma_bounds, requested_max,
   lower_gamma <- max(as.numeric(gamma_bounds[[1]]), .Machine$double.xmin)
   hard_cap_gamma <- max(as.numeric(gamma_bounds[[2]]), lower_gamma)
   current_gamma <- lower_gamma
-  batch_size <- min(max(1L, as.integer(active_probe_workers)), 6L)
-  discovery_step_ratio <- 4
   discovery_results <- data.table::data.table()
   seen_non_degenerate <- FALSE
   consecutive_degenerate <- 0L
   last_non_degenerate_gamma <- NA_real_
+  last_non_degenerate_final_cluster_count <- NA_real_
   discovered_upper_gamma <- hard_cap_gamma
   upper_cap_stop_reason <- "hard_cap"
   discovery_round <- 0L
 
   repeat {
     discovery_round <- discovery_round + 1L
+    batch_plan <- derive_cpm_discovery_batch_plan(
+      active_probe_workers = active_probe_workers,
+      requested_max = requested_max,
+      frontier_final_cluster_count = last_non_degenerate_final_cluster_count
+    )
     batch_gamma_values <- build_cpm_discovery_batch_gamma_values(
       current_gamma = current_gamma,
       hard_cap_gamma = hard_cap_gamma,
-      batch_size = batch_size,
-      step_ratio = discovery_step_ratio
+      batch_size = batch_plan$batch_size,
+      step_ratio = batch_plan$step_ratio
     )
     batch_gamma_values <- batch_gamma_values[is.finite(batch_gamma_values)]
     if (length(batch_gamma_values) == 0L) {
@@ -437,7 +479,7 @@ discover_cpm_upper_gamma <- function(igraph_obj, gamma_bounds, requested_max,
         paste(
           "RESOLUTION_SEARCH: Upper-cap discovery round", discovery_round,
           "- batch size =", length(batch_gamma_values),
-          "| step ratio =", format(signif(discovery_step_ratio, 6)),
+          "| step ratio =", format(signif(batch_plan$step_ratio, 6)),
           "| gamma values =",
           paste(signif(batch_gamma_values, 6), collapse = ", ")
         )
@@ -477,6 +519,7 @@ discover_cpm_upper_gamma <- function(igraph_obj, gamma_bounds, requested_max,
         seen_non_degenerate <- TRUE
         consecutive_degenerate <- 0L
         last_non_degenerate_gamma <- current_gamma_value
+        last_non_degenerate_final_cluster_count <- current_final
         if (is.finite(current_final) && current_final >= requested_max) {
           discovered_upper_gamma <- current_gamma_value
           upper_cap_stop_reason <- "target_covered"
@@ -530,7 +573,20 @@ discover_cpm_upper_gamma <- function(igraph_obj, gamma_bounds, requested_max,
       break
     }
 
-    next_gamma <- min(batch_max_gamma * discovery_step_ratio, hard_cap_gamma)
+    next_round_plan <- derive_cpm_discovery_batch_plan(
+      active_probe_workers = active_probe_workers,
+      requested_max = requested_max,
+      frontier_final_cluster_count = last_non_degenerate_final_cluster_count
+    )
+    next_gamma_reference <- if (is.finite(last_non_degenerate_gamma)) {
+      last_non_degenerate_gamma
+    } else {
+      batch_max_gamma
+    }
+    next_gamma <- min(next_gamma_reference * next_round_plan$step_ratio, hard_cap_gamma)
+    if (is.finite(next_gamma) && next_gamma <= batch_max_gamma) {
+      next_gamma <- min(batch_max_gamma * next_round_plan$step_ratio, hard_cap_gamma)
+    }
     if (!is.finite(next_gamma) || next_gamma <= batch_max_gamma) {
       discovered_upper_gamma <- if (seen_non_degenerate && is.finite(last_non_degenerate_gamma)) {
         last_non_degenerate_gamma

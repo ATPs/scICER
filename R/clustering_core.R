@@ -23,7 +23,18 @@ empty_cluster_results_dt <- function() {
     source_target_cluster = integer(),
     excluded = logical(),
     exclusion_reason = character(),
-    result_status = character()
+    result_status = character(),
+    phase1_primary_gamma_count = integer(),
+    phase1_secondary_gamma_count = integer(),
+    phase1_total_gamma_count = integer(),
+    phase1_elapsed_sec = numeric(),
+    phase1_leiden_runs = integer(),
+    secondary_phase1_used = logical(),
+    exact_hit_gamma_count = integer(),
+    phase4_iterations = integer(),
+    phase4_elapsed_sec = numeric(),
+    phase5_elapsed_sec = numeric(),
+    optimization_elapsed_sec = numeric()
   )
 }
 
@@ -136,7 +147,18 @@ cluster_results_dt_to_list <- function(results_dt, target_results_dt = NULL) {
     source_target_cluster = if ("source_target_cluster" %in% colnames(results_dt)) results_dt$source_target_cluster else integer(0),
     excluded = if ("excluded" %in% colnames(results_dt)) results_dt$excluded else logical(0),
     exclusion_reason = if ("exclusion_reason" %in% colnames(results_dt)) results_dt$exclusion_reason else character(0),
-    result_status = if ("result_status" %in% colnames(results_dt)) results_dt$result_status else character(0)
+    result_status = if ("result_status" %in% colnames(results_dt)) results_dt$result_status else character(0),
+    phase1_primary_gamma_count = if ("phase1_primary_gamma_count" %in% colnames(results_dt)) results_dt$phase1_primary_gamma_count else integer(0),
+    phase1_secondary_gamma_count = if ("phase1_secondary_gamma_count" %in% colnames(results_dt)) results_dt$phase1_secondary_gamma_count else integer(0),
+    phase1_total_gamma_count = if ("phase1_total_gamma_count" %in% colnames(results_dt)) results_dt$phase1_total_gamma_count else integer(0),
+    phase1_elapsed_sec = if ("phase1_elapsed_sec" %in% colnames(results_dt)) results_dt$phase1_elapsed_sec else numeric(0),
+    phase1_leiden_runs = if ("phase1_leiden_runs" %in% colnames(results_dt)) results_dt$phase1_leiden_runs else integer(0),
+    secondary_phase1_used = if ("secondary_phase1_used" %in% colnames(results_dt)) results_dt$secondary_phase1_used else logical(0),
+    exact_hit_gamma_count = if ("exact_hit_gamma_count" %in% colnames(results_dt)) results_dt$exact_hit_gamma_count else integer(0),
+    phase4_iterations = if ("phase4_iterations" %in% colnames(results_dt)) results_dt$phase4_iterations else integer(0),
+    phase4_elapsed_sec = if ("phase4_elapsed_sec" %in% colnames(results_dt)) results_dt$phase4_elapsed_sec else numeric(0),
+    phase5_elapsed_sec = if ("phase5_elapsed_sec" %in% colnames(results_dt)) results_dt$phase5_elapsed_sec else numeric(0),
+    optimization_elapsed_sec = if ("optimization_elapsed_sec" %in% colnames(results_dt)) results_dt$optimization_elapsed_sec else numeric(0)
   )
 
   if (!is.null(target_results_dt)) {
@@ -144,6 +166,125 @@ cluster_results_dt_to_list <- function(results_dt, target_results_dt = NULL) {
   }
 
   result
+}
+
+build_target_gamma_seed_table <- function(target_cluster, gamma_dict,
+                                          target_gamma_seeds = NULL,
+                                          target_interval_details = NULL,
+                                          resolution_search_diagnostics = NULL) {
+  target_key <- as.character(target_cluster)
+  interval_detail <- NULL
+  if (!is.null(target_interval_details) && target_key %in% names(target_interval_details)) {
+    interval_detail <- target_interval_details[[target_key]]
+  }
+
+  gamma_left <- if (!is.null(interval_detail) && isTRUE(is.finite(interval_detail$gamma_left))) {
+    as.numeric(interval_detail$gamma_left)
+  } else if (!is.null(gamma_dict) && target_key %in% names(gamma_dict)) {
+    as.numeric(gamma_dict[[target_key]][1])
+  } else {
+    NA_real_
+  }
+  gamma_right <- if (!is.null(interval_detail) && isTRUE(is.finite(interval_detail$gamma_right))) {
+    as.numeric(interval_detail$gamma_right)
+  } else if (!is.null(gamma_dict) && target_key %in% names(gamma_dict)) {
+    as.numeric(gamma_dict[[target_key]][2])
+  } else {
+    NA_real_
+  }
+
+  seed_values <- if (!is.null(target_gamma_seeds) && target_key %in% names(target_gamma_seeds)) {
+    as.numeric(target_gamma_seeds[[target_key]])
+  } else {
+    numeric(0)
+  }
+  seed_values <- sort(unique(seed_values[is.finite(seed_values)]))
+
+  exact_probe_values <- if (!is.null(interval_detail) && !is.null(interval_detail$exact_probe_values)) {
+    sort(unique(as.numeric(interval_detail$exact_probe_values)))
+  } else {
+    numeric(0)
+  }
+  near_probe_values <- if (!is.null(interval_detail) && !is.null(interval_detail$near_probe_values)) {
+    sort(unique(as.numeric(interval_detail$near_probe_values)))
+  } else {
+    numeric(0)
+  }
+  near_probe_values <- setdiff(near_probe_values, exact_probe_values)
+
+  selected_gamma <- NA_real_
+  if (length(seed_values) > 0L && is.finite(gamma_left) && is.finite(gamma_right)) {
+    interval_midpoint <- mean(c(gamma_left, gamma_right))
+    selected_gamma <- seed_values[[which.min(abs(seed_values - interval_midpoint))]]
+  } else if (length(seed_values) > 0L) {
+    selected_gamma <- seed_values[[1]]
+  }
+
+  role_rows <- list(
+    data.frame(gamma = gamma_left, seed_role = "left", stringsAsFactors = FALSE),
+    data.frame(gamma = gamma_right, seed_role = "right", stringsAsFactors = FALSE),
+    data.frame(gamma = selected_gamma, seed_role = "selected", stringsAsFactors = FALSE),
+    data.frame(gamma = exact_probe_values, seed_role = "exact", stringsAsFactors = FALSE),
+    data.frame(gamma = near_probe_values, seed_role = "near", stringsAsFactors = FALSE)
+  )
+  covered_values <- unique(c(gamma_left, gamma_right, selected_gamma, exact_probe_values, near_probe_values))
+  generic_seed_values <- setdiff(seed_values, covered_values)
+  role_rows[[length(role_rows) + 1L]] <- data.frame(
+    gamma = generic_seed_values,
+    seed_role = rep("seed", length(generic_seed_values)),
+    stringsAsFactors = FALSE
+  )
+
+  seed_table <- data.table::rbindlist(role_rows, fill = TRUE)
+  if (nrow(seed_table) == 0L) {
+    return(data.frame(
+      gamma = numeric(0),
+      seed_role = character(0),
+      final_cluster_count = numeric(0),
+      raw_cluster_count = numeric(0),
+      stringsAsFactors = FALSE
+    ))
+  }
+
+  seed_table <- seed_table[is.finite(gamma)]
+  seed_table[, final_cluster_count := NA_real_]
+  seed_table[, raw_cluster_count := NA_real_]
+
+  if (!is.null(resolution_search_diagnostics) &&
+      is.data.frame(resolution_search_diagnostics) &&
+      nrow(resolution_search_diagnostics) > 0L &&
+      all(c("gamma", "final_cluster_count", "raw_cluster_count") %in% colnames(resolution_search_diagnostics))) {
+    diagnostics_dt <- data.table::as.data.table(resolution_search_diagnostics)[
+      ,
+      .(gamma = as.numeric(gamma),
+        final_cluster_count = as.numeric(final_cluster_count),
+        raw_cluster_count = as.numeric(raw_cluster_count))
+    ]
+    tol <- max(.Machine$double.eps^0.5, abs(gamma_right - gamma_left) * 1e-8, 1e-12)
+    matched_counts <- lapply(seed_table$gamma, function(gamma_value) {
+      delta <- abs(diagnostics_dt$gamma - gamma_value)
+      if (length(delta) == 0L || all(!is.finite(delta))) {
+        return(c(NA_real_, NA_real_))
+      }
+      idx <- which.min(delta)
+      if (!is.finite(delta[[idx]]) || delta[[idx]] > tol) {
+        return(c(NA_real_, NA_real_))
+      }
+      c(
+        diagnostics_dt$final_cluster_count[[idx]],
+        diagnostics_dt$raw_cluster_count[[idx]]
+      )
+    })
+    matched_counts <- do.call(rbind, matched_counts)
+    if (!is.null(matched_counts)) {
+      seed_table[, final_cluster_count := as.numeric(matched_counts[, 1])]
+      seed_table[, raw_cluster_count := as.numeric(matched_counts[, 2])]
+    }
+  }
+
+  seed_table <- unique(seed_table, by = c("gamma", "seed_role"))
+  seed_table <- seed_table[order(gamma, seed_role)]
+  as.data.frame(seed_table)
 }
 
 #' Core clustering algorithm implementing binary search and optimization
@@ -256,6 +397,10 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   target_gamma_seeds <- attr(gamma_dict, "target_gamma_seeds")
   if (is.null(target_gamma_seeds)) {
     target_gamma_seeds <- setNames(vector("list", length(cluster_range)), as.character(cluster_range))
+  }
+  target_interval_details <- attr(gamma_dict, "target_interval_details")
+  if (is.null(target_interval_details)) {
+    target_interval_details <- setNames(vector("list", length(cluster_range)), as.character(cluster_range))
   }
 
   if (verbose) {
@@ -443,7 +588,18 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
         excluded = TRUE,
         exclusion_reason = x$reason,
         selected_main_result = FALSE,
-        result_status = x$reason
+        result_status = x$reason,
+        phase1_primary_gamma_count = NA_integer_,
+        phase1_secondary_gamma_count = NA_integer_,
+        phase1_total_gamma_count = NA_integer_,
+        phase1_elapsed_sec = NA_real_,
+        phase1_leiden_runs = NA_integer_,
+        secondary_phase1_used = NA,
+        exact_hit_gamma_count = NA_integer_,
+        phase4_iterations = NA_integer_,
+        phase4_elapsed_sec = NA_real_,
+        phase5_elapsed_sec = NA_real_,
+        optimization_elapsed_sec = NA_real_
       ))
     }
     return(NULL)
@@ -554,11 +710,18 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
     }
     
     # Optimize clustering within this range
+    gamma_seed_table <- build_target_gamma_seed_table(
+      target_cluster = cluster_num,
+      gamma_dict = gamma_dict,
+      target_gamma_seeds = target_gamma_seeds,
+      target_interval_details = target_interval_details,
+      resolution_search_diagnostics = resolution_search_diagnostics
+    )
     result <- optimize_clustering(
       igraph_obj, cluster_num, gamma_range, objective_function,
       n_trials, n_bootstrap, seed, beta, n_iterations, max_iterations,
       resolution_tolerance, cluster_worker_budget, snn_graph,
-      target_gamma_seeds[[as.character(cluster_num)]], min_cluster_size, verbose,
+      gamma_seed_table, min_cluster_size, verbose,
       worker_id, in_parallel_context = TRUE,
       runtime_context = runtime_context
     )
@@ -590,7 +753,18 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
           excluded = TRUE,
           exclusion_reason = result$failure_reason,
           selected_main_result = FALSE,
-          result_status = result$failure_reason
+          result_status = result$failure_reason,
+          phase1_primary_gamma_count = result$phase1_primary_gamma_count,
+          phase1_secondary_gamma_count = result$phase1_secondary_gamma_count,
+          phase1_total_gamma_count = result$phase1_total_gamma_count,
+          phase1_elapsed_sec = result$phase1_elapsed_sec,
+          phase1_leiden_runs = result$phase1_leiden_runs,
+          secondary_phase1_used = result$secondary_phase1_used,
+          exact_hit_gamma_count = result$exact_hit_gamma_count,
+          phase4_iterations = result$phase4_iterations,
+          phase4_elapsed_sec = result$phase4_elapsed_sec,
+          phase5_elapsed_sec = result$phase5_elapsed_sec,
+          optimization_elapsed_sec = result$optimization_elapsed_sec
         ))
       }
       # Calculate MEI scores
@@ -617,7 +791,18 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
         excluded = FALSE,
         exclusion_reason = "none",
         selected_main_result = FALSE,
-        result_status = "candidate"
+        result_status = "candidate",
+        phase1_primary_gamma_count = result$phase1_primary_gamma_count,
+        phase1_secondary_gamma_count = result$phase1_secondary_gamma_count,
+        phase1_total_gamma_count = result$phase1_total_gamma_count,
+        phase1_elapsed_sec = result$phase1_elapsed_sec,
+        phase1_leiden_runs = result$phase1_leiden_runs,
+        secondary_phase1_used = result$secondary_phase1_used,
+        exact_hit_gamma_count = result$exact_hit_gamma_count,
+        phase4_iterations = result$phase4_iterations,
+        phase4_elapsed_sec = result$phase4_elapsed_sec,
+        phase5_elapsed_sec = result$phase5_elapsed_sec,
+        optimization_elapsed_sec = result$optimization_elapsed_sec
       ))
     }
     return(NULL)
@@ -663,7 +848,9 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
         "cluster_number", "gamma", "effective_cluster_median",
         "raw_cluster_median", "admission_mode",
         "best_labels_raw_cluster_count", "best_labels_final_cluster_count",
-        "excluded", "selected_main_result"
+        "excluded", "selected_main_result",
+        "phase1_total_gamma_count", "phase4_iterations",
+        "optimization_elapsed_sec"
       ) %in% colnames(results_dt))) {
     format_diag_value <- function(x, digits = 6L) {
       if (length(x) == 0L || is.na(x)) {
@@ -704,6 +891,21 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
             is.na(results_dt$best_labels_final_cluster_count[[row_idx]]),
             "NA",
             as.character(results_dt$best_labels_final_cluster_count[[row_idx]])
+          ),
+          "- phase1_gammas =", ifelse(
+            is.na(results_dt$phase1_total_gamma_count[[row_idx]]),
+            "NA",
+            as.character(results_dt$phase1_total_gamma_count[[row_idx]])
+          ),
+          "- phase4_iterations =", ifelse(
+            is.na(results_dt$phase4_iterations[[row_idx]]),
+            "NA",
+            as.character(results_dt$phase4_iterations[[row_idx]])
+          ),
+          "- optimization_elapsed_sec =", ifelse(
+            is.na(results_dt$optimization_elapsed_sec[[row_idx]]),
+            "NA",
+            as.character(round(results_dt$optimization_elapsed_sec[[row_idx]], 3))
           ),
           "- selected_main_result =", results_dt$selected_main_result[[row_idx]]
         )

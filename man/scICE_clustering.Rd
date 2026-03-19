@@ -103,7 +103,7 @@ A list containing:
   \item{discovered_upper_gamma}{Shared gamma sweep upper bound discovered before the first coarse sweep in \code{cluster_range} mode}
   \item{upper_cap_stop_reason}{Reason the shared gamma upper-cap discovery stopped; typically \code{target_covered}, \code{high_gamma_degenerate}, or \code{hard_cap}}
   \item{coarse_probe_count}{Number of probe gamma values used in the first shared coarse sweep}
-  \item{target_diagnostics}{One-row-per-requested-target diagnostic table with requested/searched targets, gamma interval bounds, selected gamma, IC, exclusion status, effective/raw/final medians, and result-status labels such as \code{selected_main_result}, \code{deduplicated}, \code{resolution_search_failed}, or \code{optimization_admission_failed}}
+  \item{target_diagnostics}{One-row-per-requested-target diagnostic table with requested/searched targets, gamma interval bounds, selected gamma, IC, exclusion status, effective/raw/final medians, result-status labels such as \code{selected_main_result}, \code{deduplicated}, \code{resolution_search_failed}, or \code{optimization_admission_failed}, plus optimization diagnostics including Phase 1 gamma counts/runs, exact-hit gamma count, Phase 4 iterations, and per-target elapsed times}
   \item{plateau_stop}{Whether the shared gamma sweep stopped after consecutive plateau rounds without new coverage}
   \item{uncovered_targets}{Requested final cluster targets that are missing from the returned main result object}
   \item{search_uncovered_targets}{Requested final cluster targets that the shared gamma sweep did not resolve into optimization-ready gamma intervals}

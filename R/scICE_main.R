@@ -55,6 +55,17 @@ build_target_diagnostics_df <- function(target_results_dt, requested_cluster_ran
     final_cluster_median = rep(NA_real_, length(searched_targets)),
     best_labels_raw_cluster_count = rep(NA_integer_, length(searched_targets)),
     best_labels_final_cluster_count = rep(NA_integer_, length(searched_targets)),
+    phase1_primary_gamma_count = rep(NA_integer_, length(searched_targets)),
+    phase1_secondary_gamma_count = rep(NA_integer_, length(searched_targets)),
+    phase1_total_gamma_count = rep(NA_integer_, length(searched_targets)),
+    phase1_elapsed_sec = rep(NA_real_, length(searched_targets)),
+    phase1_leiden_runs = rep(NA_integer_, length(searched_targets)),
+    secondary_phase1_used = rep(NA, length(searched_targets)),
+    exact_hit_gamma_count = rep(NA_integer_, length(searched_targets)),
+    phase4_iterations = rep(NA_integer_, length(searched_targets)),
+    phase4_elapsed_sec = rep(NA_real_, length(searched_targets)),
+    phase5_elapsed_sec = rep(NA_real_, length(searched_targets)),
+    optimization_elapsed_sec = rep(NA_real_, length(searched_targets)),
     excluded = rep(FALSE, length(searched_targets)),
     exclusion_reason = rep("missing_target_result", length(searched_targets)),
     selected_main_result = rep(FALSE, length(searched_targets)),
@@ -97,6 +108,39 @@ build_target_diagnostics_df <- function(target_results_dt, requested_cluster_ran
   }
   diagnostics_df$best_labels_raw_cluster_count[has_match] <- as.integer(target_results_dt$best_labels_raw_cluster_count[matched_idx[has_match]])
   diagnostics_df$best_labels_final_cluster_count[has_match] <- as.integer(target_results_dt$best_labels_final_cluster_count[matched_idx[has_match]])
+  if ("phase1_primary_gamma_count" %in% colnames(target_results_dt)) {
+    diagnostics_df$phase1_primary_gamma_count[has_match] <- as.integer(target_results_dt$phase1_primary_gamma_count[matched_idx[has_match]])
+  }
+  if ("phase1_secondary_gamma_count" %in% colnames(target_results_dt)) {
+    diagnostics_df$phase1_secondary_gamma_count[has_match] <- as.integer(target_results_dt$phase1_secondary_gamma_count[matched_idx[has_match]])
+  }
+  if ("phase1_total_gamma_count" %in% colnames(target_results_dt)) {
+    diagnostics_df$phase1_total_gamma_count[has_match] <- as.integer(target_results_dt$phase1_total_gamma_count[matched_idx[has_match]])
+  }
+  if ("phase1_elapsed_sec" %in% colnames(target_results_dt)) {
+    diagnostics_df$phase1_elapsed_sec[has_match] <- as.numeric(target_results_dt$phase1_elapsed_sec[matched_idx[has_match]])
+  }
+  if ("phase1_leiden_runs" %in% colnames(target_results_dt)) {
+    diagnostics_df$phase1_leiden_runs[has_match] <- as.integer(target_results_dt$phase1_leiden_runs[matched_idx[has_match]])
+  }
+  if ("secondary_phase1_used" %in% colnames(target_results_dt)) {
+    diagnostics_df$secondary_phase1_used[has_match] <- as.logical(target_results_dt$secondary_phase1_used[matched_idx[has_match]])
+  }
+  if ("exact_hit_gamma_count" %in% colnames(target_results_dt)) {
+    diagnostics_df$exact_hit_gamma_count[has_match] <- as.integer(target_results_dt$exact_hit_gamma_count[matched_idx[has_match]])
+  }
+  if ("phase4_iterations" %in% colnames(target_results_dt)) {
+    diagnostics_df$phase4_iterations[has_match] <- as.integer(target_results_dt$phase4_iterations[matched_idx[has_match]])
+  }
+  if ("phase4_elapsed_sec" %in% colnames(target_results_dt)) {
+    diagnostics_df$phase4_elapsed_sec[has_match] <- as.numeric(target_results_dt$phase4_elapsed_sec[matched_idx[has_match]])
+  }
+  if ("phase5_elapsed_sec" %in% colnames(target_results_dt)) {
+    diagnostics_df$phase5_elapsed_sec[has_match] <- as.numeric(target_results_dt$phase5_elapsed_sec[matched_idx[has_match]])
+  }
+  if ("optimization_elapsed_sec" %in% colnames(target_results_dt)) {
+    diagnostics_df$optimization_elapsed_sec[has_match] <- as.numeric(target_results_dt$optimization_elapsed_sec[matched_idx[has_match]])
+  }
   diagnostics_df$excluded[has_match] <- as.logical(target_results_dt$excluded[matched_idx[has_match]])
   diagnostics_df$exclusion_reason[has_match] <- as.character(target_results_dt$exclusion_reason[matched_idx[has_match]])
   diagnostics_df$selected_main_result[has_match] <- as.logical(target_results_dt$selected_main_result[matched_idx[has_match]])
@@ -124,6 +168,17 @@ build_target_diagnostics_df <- function(target_results_dt, requested_cluster_ran
     final_cluster_median = as.numeric(diagnostics_df$final_cluster_median),
     best_labels_raw_cluster_count = as.integer(diagnostics_df$best_labels_raw_cluster_count),
     best_labels_final_cluster_count = as.integer(diagnostics_df$best_labels_final_cluster_count),
+    phase1_primary_gamma_count = as.integer(diagnostics_df$phase1_primary_gamma_count),
+    phase1_secondary_gamma_count = as.integer(diagnostics_df$phase1_secondary_gamma_count),
+    phase1_total_gamma_count = as.integer(diagnostics_df$phase1_total_gamma_count),
+    phase1_elapsed_sec = as.numeric(diagnostics_df$phase1_elapsed_sec),
+    phase1_leiden_runs = as.integer(diagnostics_df$phase1_leiden_runs),
+    secondary_phase1_used = as.logical(diagnostics_df$secondary_phase1_used),
+    exact_hit_gamma_count = as.integer(diagnostics_df$exact_hit_gamma_count),
+    phase4_iterations = as.integer(diagnostics_df$phase4_iterations),
+    phase4_elapsed_sec = as.numeric(diagnostics_df$phase4_elapsed_sec),
+    phase5_elapsed_sec = as.numeric(diagnostics_df$phase5_elapsed_sec),
+    optimization_elapsed_sec = as.numeric(diagnostics_df$optimization_elapsed_sec),
     excluded = as.logical(diagnostics_df$excluded),
     exclusion_reason = as.character(diagnostics_df$exclusion_reason),
     selected_main_result = as.logical(diagnostics_df$selected_main_result),
@@ -555,7 +610,7 @@ build_manual_resolution_results <- function(igraph_obj, resolution_values, n_wor
 #'   \item{discovered_upper_gamma}{Shared gamma sweep upper bound discovered before the first coarse sweep in \code{cluster_range} mode}
 #'   \item{upper_cap_stop_reason}{Reason the shared gamma upper-cap discovery stopped; typically \code{target_covered}, \code{high_gamma_degenerate}, or \code{hard_cap}}
 #'   \item{coarse_probe_count}{Number of probe gamma values used in the first shared coarse sweep}
-#'   \item{target_diagnostics}{One-row-per-requested-target diagnostic table with requested/searched targets, gamma interval bounds, selected gamma, IC, exclusion status, effective/raw/final medians, and result-status labels such as \code{selected_main_result}, \code{deduplicated}, \code{resolution_search_failed}, or \code{optimization_admission_failed}}
+#'   \item{target_diagnostics}{One-row-per-requested-target diagnostic table with requested/searched targets, gamma interval bounds, selected gamma, IC, exclusion status, effective/raw/final medians, result-status labels such as \code{selected_main_result}, \code{deduplicated}, \code{resolution_search_failed}, or \code{optimization_admission_failed}, plus optimization diagnostics including Phase 1 gamma counts/runs, exact-hit gamma count, Phase 4 iterations, and per-target elapsed times}
 #'   \item{plateau_stop}{Whether the shared gamma sweep stopped after consecutive plateau rounds without new coverage}
 #'   \item{uncovered_targets}{Requested final cluster targets that are missing from the returned main result object}
 #'   \item{search_uncovered_targets}{Requested final cluster targets that the shared gamma sweep did not resolve into optimization-ready gamma intervals}

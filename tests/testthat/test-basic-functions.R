@@ -1163,6 +1163,69 @@ test_that("optimize_clustering reuses shared-search gamma seeds during phase 1",
   expect_equal(result_with_seed$best_labels_final_cluster_count, 3L)
 })
 
+test_that("build_optimization_gamma_batches respects budget and preserves anchor seeds", {
+  seed_table <- data.frame(
+    gamma = c(1e-6, 2e-6, 3e-6, 4e-6, 5e-6, 6e-6, 7e-6, 8e-6, 9e-6, 1e-5),
+    seed_role = c("left", "selected", "exact", "near", "near", "near", "seed", "seed", "seed", "right"),
+    final_cluster_count = c(10, 11, 12, 11, 13, 12, 10, 11, 12, 14),
+    raw_cluster_count = c(10, 11, 12, 13, 14, 15, 16, 17, 18, 19)
+  )
+
+  batches <- scICER:::build_optimization_gamma_batches(
+    gamma_range = c(1e-6, 1e-5),
+    gamma_seed_values = seed_table,
+    target_clusters = 12L,
+    objective_function = "CPM",
+    resolution_tolerance = 1e-8,
+    n_vertices = 1000L
+  )
+
+  expect_lte(length(batches$primary_gammas), 8L)
+  expect_lte(length(c(batches$primary_gammas, batches$secondary_gammas)), 12L)
+  expect_true(1e-6 %in% batches$primary_gammas)
+  expect_true(2e-6 %in% batches$primary_gammas)
+  expect_true(1e-5 %in% batches$primary_gammas)
+  expect_true(3e-6 %in% batches$primary_gammas)
+})
+
+test_that("phase1 secondary expansion only runs for unresolved unguarded paths", {
+  expect_false(scICER:::should_expand_phase1_secondary(
+    valid_indices = 1:2,
+    admission_mode = "strict_soft",
+    exact_hit_gamma_count = 0L
+  ))
+  expect_false(scICER:::should_expand_phase1_secondary(
+    valid_indices = 1:2,
+    admission_mode = "relaxed_unguarded",
+    exact_hit_gamma_count = 1L
+  ))
+  expect_true(scICER:::should_expand_phase1_secondary(
+    valid_indices = integer(0),
+    admission_mode = "none",
+    exact_hit_gamma_count = 0L
+  ))
+  expect_true(scICER:::should_expand_phase1_secondary(
+    valid_indices = 1L,
+    admission_mode = "relaxed_unguarded",
+    exact_hit_gamma_count = 0L
+  ))
+})
+
+test_that("phase4 skip and iteration cap helpers enforce bounded refinement", {
+  expect_true(scICER:::should_skip_phase4_refinement(
+    candidate_count = 2L,
+    best_ic = 1.005,
+    exact_hit_gamma_count = 1L
+  ))
+  expect_false(scICER:::should_skip_phase4_refinement(
+    candidate_count = 3L,
+    best_ic = 1.001,
+    exact_hit_gamma_count = 2L
+  ))
+  expect_equal(scICER:::phase4_iteration_cap_for_mode("relaxed_unguarded"), 2L)
+  expect_equal(scICER:::phase4_iteration_cap_for_mode("strict_soft"), 3L)
+})
+
 test_that("finalize_selected_clustering prefers exact final-hit trials for best_labels", {
   best_matrix <- cbind(
     c(0L, 0L, 1L, 2L, 3L, 3L),
@@ -1572,6 +1635,85 @@ test_that("build_cpm_discovery_batch_gamma_values narrows each discovery batch",
   expect_equal(batch_values[[1]], 1e-08, tolerance = 1e-16)
   expect_equal(max(batch_values), 1.6384e-04, tolerance = 1e-12)
   expect_true(all(diff(log(batch_values)) > 0))
+})
+
+test_that("derive_cpm_discovery_batch_plan narrows near the requested max", {
+  default_plan <- scICER:::derive_cpm_discovery_batch_plan(
+    active_probe_workers = 40,
+    requested_max = 20,
+    frontier_final_cluster_count = 4
+  )
+  expect_equal(default_plan$batch_size, 6L)
+  expect_equal(default_plan$step_ratio, 4)
+
+  mid_plan <- scICER:::derive_cpm_discovery_batch_plan(
+    active_probe_workers = 40,
+    requested_max = 20,
+    frontier_final_cluster_count = 10
+  )
+  expect_equal(mid_plan$batch_size, 3L)
+  expect_equal(mid_plan$step_ratio, 2)
+
+  frontier_plan <- scICER:::derive_cpm_discovery_batch_plan(
+    active_probe_workers = 40,
+    requested_max = 20,
+    frontier_final_cluster_count = 15
+  )
+  expect_equal(frontier_plan$batch_size, 2L)
+  expect_equal(frontier_plan$step_ratio, 2)
+
+  near_target_plan <- scICER:::derive_cpm_discovery_batch_plan(
+    active_probe_workers = 40,
+    requested_max = 20,
+    frontier_final_cluster_count = 19
+  )
+  expect_equal(near_target_plan$batch_size, 2L)
+  expect_equal(near_target_plan$step_ratio, 1.5)
+})
+
+test_that("find_resolution_ranges CPM narrows discovery batches near requested max", {
+  ig <- igraph::make_ring(16)
+  captured_messages <- character()
+
+  local_mocked_bindings(
+    cached_leiden_clustering = function(igraph_obj, resolution, ...) {
+      if (resolution < 1e-5) {
+        return(rep(0:1, each = 8))
+      }
+      if (resolution < 2.048e-05) {
+        return(rep(0:5, c(3, 3, 3, 3, 2, 2)))
+      }
+      if (resolution < 4.096e-05) {
+        return(rep(0:7, each = 2))
+      }
+      return(rep(0:15, each = 1))
+    },
+    .package = "scICER"
+  )
+
+  withCallingHandlers(
+    suppressWarnings(scICER:::find_resolution_ranges(
+      igraph_obj = ig,
+      cluster_range = 8L,
+      start_g = log(1e-8),
+      end_g = 20,
+      objective_function = "CPM",
+      resolution_tolerance = 1e-8,
+      n_workers = 40,
+      verbose = TRUE,
+      min_cluster_size = 1L
+    )),
+    message = function(m) {
+      captured_messages <<- c(captured_messages, conditionMessage(m))
+      invokeRestart("muffleMessage")
+    }
+  )
+
+  expect_true(any(grepl(
+    "Upper-cap discovery round 2 - batch size = 2 | step ratio = 2 | gamma values = 2.048e-05, 4.096e-05",
+    captured_messages,
+    fixed = TRUE
+  )))
 })
 
 test_that("find_resolution_ranges oversubscribes the first coarse sweep only", {
