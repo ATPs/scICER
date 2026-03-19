@@ -21,7 +21,10 @@ clustering_main(
   resolution_tolerance,
   verbose,
   in_parallel_context = FALSE,
-  runtime_context = NULL
+  runtime_context = NULL,
+  precomputed_gamma_dict = NULL,
+  precomputed_resolution_search_diagnostics = NULL,
+  precomputed_coverage_complete = NULL
 )
 }
 \arguments{

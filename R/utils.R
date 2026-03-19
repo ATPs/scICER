@@ -315,12 +315,37 @@ create_results_summary <- function(scice_results, threshold = 1.005) {
     package_version <- "unknown"
   }
 
+  format_cluster_values <- function(values) {
+    values <- sort(unique(as.integer(values[is.finite(values)])))
+    if (length(values) == 0L) {
+      return("none")
+    }
+    if (length(values) == 1L) {
+      return(as.character(values))
+    }
+    if (identical(values, seq.int(min(values), max(values)))) {
+      return(paste0(min(values), "-", max(values), " (", length(values), " values)"))
+    }
+    paste0(paste(values, collapse = ", "), " (", length(values), " values)")
+  }
+
   analysis_mode <- if (!is.null(scice_results$analysis_mode) &&
                        length(scice_results$analysis_mode) == 1L &&
                        nzchar(scice_results$analysis_mode)) {
     scice_results$analysis_mode
   } else {
     "cluster_range"
+  }
+
+  target_diagnostics <- scice_results$target_diagnostics
+  has_target_diagnostics <- is.data.frame(target_diagnostics)
+  search_diagnostics <- scice_results$resolution_search_diagnostics
+  has_search_diagnostics <- is.data.frame(search_diagnostics)
+  excluded_targets <- if (has_target_diagnostics &&
+                          all(c("searched_target_cluster", "excluded") %in% colnames(target_diagnostics))) {
+    as.integer(target_diagnostics$searched_target_cluster[target_diagnostics$excluded])
+  } else {
+    integer(0)
   }
   
   # Header
@@ -352,16 +377,43 @@ create_results_summary <- function(scice_results, threshold = 1.005) {
       paste("- Returned cluster numbers:", paste(scice_results$n_cluster, collapse = ", "))
     )
   } else {
-    cluster_range_label <- if (length(scice_results$n_cluster) > 0) {
-      paste(range(scice_results$n_cluster), collapse = "-")
+    requested_range_label <- if (!is.null(scice_results$requested_cluster_range)) {
+      format_cluster_values(scice_results$requested_cluster_range)
     } else {
       "none"
     }
+    searched_range_label <- if (!is.null(scice_results$searched_target_cluster_range)) {
+      format_cluster_values(scice_results$searched_target_cluster_range)
+    } else if (has_target_diagnostics && "searched_target_cluster" %in% colnames(target_diagnostics)) {
+      format_cluster_values(target_diagnostics$searched_target_cluster)
+    } else {
+      "none"
+    }
+    returned_final_label <- format_cluster_values(scice_results$n_cluster)
     parameter_lines <- c(
       parameter_lines,
-      paste("- Cluster range tested:", cluster_range_label),
-      paste("- Total cluster numbers:", length(scice_results$n_cluster))
+      paste("- Requested final cluster range:", requested_range_label),
+      paste("- Searched target cluster range:", searched_range_label),
+      paste("- Returned final cluster numbers:", returned_final_label),
+      paste("- Total searched targets:", if (has_target_diagnostics) nrow(target_diagnostics) else length(scice_results$n_cluster)),
+      paste("- Total returned final clusters:", length(scice_results$n_cluster)),
+      paste("- Shared gamma probes:", if (has_search_diagnostics) nrow(search_diagnostics) else 0),
+      paste("- Shared gamma sweep coverage complete:", if (!is.null(scice_results$search_coverage_complete)) isTRUE(scice_results$search_coverage_complete) else "unknown"),
+      paste("- Coverage complete:", if (!is.null(scice_results$coverage_complete)) isTRUE(scice_results$coverage_complete) else "unknown"),
+      paste("- Excluded searched targets:", length(excluded_targets))
     )
+    if (!is.null(scice_results$uncovered_targets) && length(scice_results$uncovered_targets) > 0L) {
+      parameter_lines <- c(
+        parameter_lines,
+        paste("- Uncovered requested final targets:", paste(scice_results$uncovered_targets, collapse = ", "))
+      )
+    }
+    if (!is.null(scice_results$plateau_stop)) {
+      parameter_lines <- c(
+        parameter_lines,
+        paste("- Plateau stop triggered:", isTRUE(scice_results$plateau_stop))
+      )
+    }
   }
   if (!is.null(scice_results$best_cluster) && length(scice_results$best_cluster) == 1L &&
       !is.na(scice_results$best_cluster)) {
@@ -452,7 +504,7 @@ create_results_summary <- function(scice_results, threshold = 1.005) {
       if (identical(analysis_mode, "resolution")) {
         "- Trying additional manual resolution values"
       } else {
-        "- Expanding the cluster range"
+        "- Expanding the requested final cluster range"
       },
       "- Checking data preprocessing steps"
     )

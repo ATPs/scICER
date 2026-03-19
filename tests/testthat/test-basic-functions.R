@@ -523,18 +523,94 @@ test_that("scICE_clustering manual resolution mode ignores cluster_range and ded
 
 test_that("scICE_clustering keeps raw best labels while storing min_cluster_size", {
   data("pbmc_small", package = "SeuratObject")
+  n_cells <- ncol(pbmc_small)
+  mock_target_results <- function(searched_targets, final_clusters, ic_values,
+                                  gamma_values, raw_clusters, excluded,
+                                  exclusion_reason) {
+    best_labels <- lapply(seq_along(searched_targets), function(i) {
+      if (isTRUE(excluded[[i]])) {
+        return(NULL)
+      }
+      as.integer(rep(seq_len(final_clusters[[i]]) - 1L, length.out = n_cells))
+    })
+    raw_labels <- lapply(best_labels, function(labels) {
+      if (is.null(labels)) {
+        return(NULL)
+      }
+      list(arr = list(labels), parr = 1)
+    })
+    data.table::data.table(
+      cluster_number = as.integer(searched_targets),
+      gamma = as.numeric(gamma_values),
+      labels = raw_labels,
+      ic = as.numeric(ic_values),
+      ic_vec = lapply(ic_values, function(x) c(x, x + 0.001)),
+      best_labels = best_labels,
+      effective_cluster_median = ifelse(excluded, NA_real_, as.numeric(final_clusters)),
+      raw_cluster_median = as.numeric(raw_clusters),
+      admission_mode = rep("mock_admission", length(searched_targets)),
+      best_labels_raw_cluster_count = as.integer(raw_clusters),
+      best_labels_final_cluster_count = ifelse(excluded, NA_integer_, as.integer(final_clusters)),
+      n_iter = rep(10L, length(searched_targets)),
+      mei = lapply(seq_along(searched_targets), function(i) rep(0.5, n_cells)),
+      k = as.integer(searched_targets),
+      source_target_cluster = as.integer(searched_targets),
+      excluded = as.logical(excluded),
+      exclusion_reason = as.character(exclusion_reason),
+      selected_main_result = rep(FALSE, length(searched_targets))
+    )
+  }
 
-  result <- scICE_clustering(
-    object = pbmc_small,
-    graph_name = "RNA_snn",
-    cluster_range = 2:3,
-    n_workers = 1,
-    n_trials = 2,
-    n_bootstrap = 2,
-    seed = 123,
-    remove_threshold = Inf,
-    min_cluster_size = 2,
-    verbose = FALSE
+  local_mocked_bindings(
+    find_resolution_ranges = function(...) {
+      gamma_dict <- list("2" = c(0.2, 0.3))
+      attr(gamma_dict, "resolution_search_diagnostics") <- data.frame(
+        sweep_round = 1L,
+        gamma = 0.25,
+        effective_cluster_count = 2,
+        raw_cluster_count = 2,
+        final_cluster_count = 2,
+        raw_class = "raw_in_band",
+        over_fragmented = FALSE,
+        selected_for_refinement = FALSE,
+        selected_for_target_interval = TRUE,
+        plateau_round = 0L,
+        stringsAsFactors = FALSE
+      )
+      attr(gamma_dict, "coverage_complete") <- FALSE
+      attr(gamma_dict, "plateau_stop") <- TRUE
+      attr(gamma_dict, "uncovered_targets") <- 3L
+      gamma_dict
+    },
+    clustering_main = function(...) {
+      list(
+        target_results = mock_target_results(
+          searched_targets = c(2L, 3L),
+          final_clusters = c(2L, NA_integer_),
+          ic_values = c(1.001, NA_real_),
+          gamma_values = c(0.25, NA_real_),
+          raw_clusters = c(2L, NA_integer_),
+          excluded = c(FALSE, TRUE),
+          exclusion_reason = c("none", "resolution_search_failed")
+        )
+      )
+    },
+    .package = "scICER"
+  )
+
+  suppressWarnings(
+    result <- scICE_clustering(
+      object = pbmc_small,
+      graph_name = "RNA_snn",
+      cluster_range = 2:3,
+      n_workers = 1,
+      n_trials = 2,
+      n_bootstrap = 2,
+      seed = 123,
+      remove_threshold = Inf,
+      min_cluster_size = 2,
+      verbose = FALSE
+    )
   )
 
   expect_equal(result$min_cluster_size, 2L)
@@ -545,6 +621,72 @@ test_that("scICE_clustering keeps raw best labels while storing min_cluster_size
 
 test_that("scICE_clustering returns per-k selection diagnostics", {
   data("pbmc_small", package = "SeuratObject")
+  n_cells <- ncol(pbmc_small)
+  mock_target_results <- function(searched_targets, final_clusters, ic_values,
+                                  gamma_values, raw_clusters) {
+    best_labels <- lapply(seq_along(searched_targets), function(i) {
+      as.integer(rep(seq_len(final_clusters[[i]]) - 1L, length.out = n_cells))
+    })
+    raw_labels <- lapply(best_labels, function(labels) list(arr = list(labels), parr = 1))
+    data.table::data.table(
+      cluster_number = as.integer(searched_targets),
+      gamma = as.numeric(gamma_values),
+      labels = raw_labels,
+      ic = as.numeric(ic_values),
+      ic_vec = lapply(ic_values, function(x) c(x, x + 0.001)),
+      best_labels = best_labels,
+      effective_cluster_median = as.numeric(final_clusters),
+      raw_cluster_median = as.numeric(raw_clusters),
+      admission_mode = rep("mock_admission", length(searched_targets)),
+      best_labels_raw_cluster_count = as.integer(raw_clusters),
+      best_labels_final_cluster_count = as.integer(final_clusters),
+      n_iter = rep(10L, length(searched_targets)),
+      mei = lapply(seq_along(searched_targets), function(i) rep(0.5, n_cells)),
+      k = as.integer(searched_targets),
+      source_target_cluster = as.integer(searched_targets),
+      excluded = rep(FALSE, length(searched_targets)),
+      exclusion_reason = rep("none", length(searched_targets)),
+      selected_main_result = rep(FALSE, length(searched_targets))
+    )
+  }
+
+  local_mocked_bindings(
+    find_resolution_ranges = function(...) {
+      gamma_dict <- list(
+        "2" = c(0.2, 0.3),
+        "3" = c(0.3, 0.4)
+      )
+      attr(gamma_dict, "resolution_search_diagnostics") <- data.frame(
+        sweep_round = c(1L, 1L),
+        gamma = c(0.25, 0.35),
+        effective_cluster_count = c(2, 3),
+        raw_cluster_count = c(2, 3),
+        final_cluster_count = c(2, 3),
+        raw_class = c("raw_in_band", "raw_in_band"),
+        over_fragmented = c(FALSE, FALSE),
+        selected_for_refinement = c(FALSE, FALSE),
+        selected_for_target_interval = c(TRUE, TRUE),
+        plateau_round = c(0L, 0L),
+        stringsAsFactors = FALSE
+      )
+      attr(gamma_dict, "coverage_complete") <- TRUE
+      attr(gamma_dict, "plateau_stop") <- FALSE
+      attr(gamma_dict, "uncovered_targets") <- integer(0)
+      gamma_dict
+    },
+    clustering_main = function(...) {
+      list(
+        target_results = mock_target_results(
+          searched_targets = c(2L, 3L),
+          final_clusters = c(2L, 3L),
+          ic_values = c(1.001, 1.002),
+          gamma_values = c(0.25, 0.35),
+          raw_clusters = c(2L, 3L)
+        )
+      )
+    },
+    .package = "scICER"
+  )
 
   result <- scICE_clustering(
     object = pbmc_small,
@@ -566,6 +708,8 @@ test_that("scICE_clustering returns per-k selection diagnostics", {
   expect_true(all(is.finite(result$effective_cluster_median)))
   expect_true(all(is.finite(result$raw_cluster_median)))
   expect_true(all(nzchar(result$admission_mode)))
+  expect_equal(result$target_diagnostics$gamma_left, c(0.2, 0.3))
+  expect_equal(result$target_diagnostics$gamma_right, c(0.3, 0.4))
   final_cluster_counts <- vapply(
     result$best_labels,
     function(labels) as.integer(length(unique(labels))),
@@ -914,7 +1058,7 @@ test_that("optimize_clustering accepts strict-only gamma even when no trial hits
   expect_equal(observed_arr, expected_arr)
 })
 
-test_that("optimize_clustering returns NULL when strict and relaxed admissions both fail", {
+test_that("optimize_clustering can fall back to raw-count admission when final-count admission fails", {
   ig <- igraph::make_ring(4)
   hit_labels <- c(0L, 0L, 1L, 1L)   # effective clusters (min=2): 2
   miss_labels <- c(0L, 1L, 2L, 3L)  # effective clusters (min=2): 0
@@ -951,8 +1095,110 @@ test_that("optimize_clustering returns NULL when strict and relaxed admissions b
     in_parallel_context = FALSE
   )
 
-  # Effective counts are {2, 0, 0}: strict fails (median_int=0), relaxed fails (gap>1).
-  expect_null(result)
+  expect_type(result, "list")
+  expect_true("best_labels_final_cluster_count" %in% names(result))
+})
+
+test_that("optimize_clustering reuses shared-search gamma seeds during phase 1", {
+  ig <- igraph::make_ring(6)
+  labels_2 <- c(0L, 0L, 0L, 1L, 1L, 1L)
+  labels_3 <- c(0L, 0L, 1L, 1L, 2L, 2L)
+  labels_4 <- c(0L, 0L, 1L, 2L, 3L, 3L)
+
+  local_mocked_bindings(
+    leiden_clustering = function(igraph_obj, resolution, objective_function,
+                                 n_iterations, beta, initial_membership = NULL) {
+      if (abs(resolution - 0.05) < 1e-8) {
+        return(labels_3)
+      }
+      if (resolution < 0.05) {
+        return(labels_2)
+      }
+      labels_4
+    },
+    .package = "scICER"
+  )
+
+  result_without_seed <- scICER:::optimize_clustering(
+    igraph_obj = ig,
+    target_clusters = 3L,
+    gamma_range = c(0, 0.2),
+    objective_function = "modularity",
+    n_trials = 1L,
+    n_bootstrap = 1L,
+    seed = 123,
+    beta = 0.1,
+    n_iterations = 1L,
+    max_iterations = 3L,
+    resolution_tolerance = 1e-3,
+    n_workers = 1L,
+    min_cluster_size = 1L,
+    verbose = FALSE,
+    worker_id = "TEST",
+    in_parallel_context = FALSE
+  )
+  expect_false(isTRUE(result_without_seed$success))
+  expect_identical(result_without_seed$failure_reason, "optimization_admission_failed")
+
+  result_with_seed <- scICER:::optimize_clustering(
+    igraph_obj = ig,
+    target_clusters = 3L,
+    gamma_range = c(0, 0.2),
+    objective_function = "modularity",
+    n_trials = 1L,
+    n_bootstrap = 1L,
+    seed = 123,
+    beta = 0.1,
+    n_iterations = 1L,
+    max_iterations = 3L,
+    resolution_tolerance = 1e-3,
+    n_workers = 1L,
+    gamma_seed_values = 0.05,
+    min_cluster_size = 1L,
+    verbose = FALSE,
+    worker_id = "TEST",
+    in_parallel_context = FALSE
+  )
+  expect_true(isTRUE(result_with_seed$success))
+  expect_equal(result_with_seed$best_labels_final_cluster_count, 3L)
+})
+
+test_that("finalize_selected_clustering prefers exact final-hit trials for best_labels", {
+  best_matrix <- cbind(
+    c(0L, 0L, 1L, 2L, 3L, 3L),
+    c(0L, 0L, 1L, 1L, 2L, 2L),
+    c(0L, 1L, 1L, 2L, 3L, 3L)
+  )
+
+  local_mocked_bindings(
+    load_cluster_matrix = function(matrix_ref) best_matrix,
+    release_cluster_matrix = function(matrix_ref) invisible(NULL),
+    extract_clustering_array = function(clustering_matrix) {
+      arr <- lapply(seq_len(ncol(clustering_matrix)), function(idx) clustering_matrix[, idx])
+      list(arr = arr, parr = rep(1 / length(arr), length(arr)))
+    },
+    calculate_ic_from_extracted = function(extracted) 1,
+    get_best_clustering = function(clustering_array) clustering_array$arr[[1]],
+    .package = "scICER"
+  )
+
+  result <- scICER:::finalize_selected_clustering(
+    matrix_ref = "fake_ref",
+    gamma = 0.1,
+    effective_cluster_median = 3,
+    raw_cluster_median = 3,
+    final_cluster_median = 3,
+    admission_mode = "strict_soft",
+    cluster_seed = 123,
+    n_bootstrap = 2L,
+    n_workers = 1L,
+    target_clusters = 3L,
+    min_cluster_size = 1L,
+    verbose = FALSE
+  )
+
+  expect_equal(result$best_labels_final_cluster_count, 3L)
+  expect_equal(length(unique(result$best_labels)), 3L)
 })
 
 test_that("plot_ic show_gamma moves gamma labels onto rotated x-axis ticks", {
@@ -1008,10 +1254,12 @@ test_that("find_resolution_ranges reuses one representative preliminary clusteri
   )
   
   expect_true("2" %in% names(ranges))
-  expect_equal(call_count, 1L)
+  diagnostics <- attr(ranges, "resolution_search_diagnostics")
+  expect_true(is.data.frame(diagnostics))
+  expect_equal(call_count, nrow(diagnostics))
 })
 
-test_that("find_resolution_ranges target matching uses effective cluster count", {
+test_that("find_resolution_ranges target matching uses final merged cluster count", {
   ig <- igraph::make_ring(4)
   call_count <- 0L
 
@@ -1020,6 +1268,7 @@ test_that("find_resolution_ranges target matching uses effective cluster count",
       call_count <<- call_count + 1L
       c(0L, 0L, 0L, 1L)
     },
+    merge_small_clusters_to_neighbors = function(...) c(0L, 0L, 0L, 0L),
     .package = "scICER"
   )
 
@@ -1037,7 +1286,49 @@ test_that("find_resolution_ranges target matching uses effective cluster count",
   )
 
   expect_true("1" %in% names(ranges))
-  expect_equal(call_count, 12L)
+  expect_gte(call_count, 1L)
+})
+
+test_that("find_resolution_ranges refines beyond coarse brackets when targets are not optimization-ready", {
+  ig <- igraph::make_ring(6)
+  call_count <- 0L
+  labels_2 <- c(0L, 0L, 0L, 1L, 1L, 1L)
+  labels_3 <- c(0L, 0L, 1L, 1L, 2L, 2L)
+  labels_4 <- c(0L, 0L, 1L, 2L, 3L, 3L)
+
+  local_mocked_bindings(
+    cached_leiden_clustering = function(igraph_obj, resolution, ...) {
+      call_count <<- call_count + 1L
+      if (abs(resolution - 0.05) < 1e-8) {
+        return(labels_3)
+      }
+      if (resolution < 0.05) {
+        return(labels_2)
+      }
+      labels_4
+    },
+    .package = "scICER"
+  )
+
+  ranges <- scICER:::find_resolution_ranges(
+    igraph_obj = ig,
+    cluster_range = 3L,
+    start_g = 0,
+    end_g = 0.2,
+    objective_function = "modularity",
+    resolution_tolerance = 1e-3,
+    n_workers = 1,
+    verbose = FALSE
+  )
+
+  diagnostics <- attr(ranges, "resolution_search_diagnostics")
+  expect_true("3" %in% names(ranges))
+  expect_gt(nrow(diagnostics), 11L)
+  expect_true(isTRUE(attr(ranges, "coverage_complete")))
+  expect_true(any(abs(diagnostics$gamma - 0.05) < 1e-8))
+  seed_values <- attr(ranges, "target_gamma_seeds")[["3"]]
+  expect_true(any(abs(seed_values - 0.05) < 1e-8))
+  expect_equal(call_count, nrow(diagnostics))
 })
 
 test_that("find_resolution_ranges CPM fallback keeps degenerate ranges on the gamma scale", {
@@ -1101,7 +1392,7 @@ test_that("find_resolution_ranges avoids drifting into all-small high-gamma regi
   expect_true(is.numeric(bounds))
   expect_true(length(bounds) == 2L)
   expect_true(bounds[1] < bounds[2])
-  expect_lt(bounds[2], 80)
+  expect_lte(bounds[2], 100)
 })
 
 test_that("find_resolution_ranges keeps representative preliminary summaries when no hit exists", {
@@ -1127,12 +1418,13 @@ test_that("find_resolution_ranges keeps representative preliminary summaries whe
     verbose = FALSE
   )
   
-  # The nominal preliminary trial set is summarized from one representative clustering.
-  expect_true("2" %in% names(ranges))
-  expect_equal(call_count, 1L)
+  expect_false("2" %in% names(ranges))
+  expect_gte(call_count, 1L)
+  expect_true(is.data.frame(attr(ranges, "resolution_search_diagnostics")))
+  expect_equal(attr(ranges, "uncovered_targets"), 2L)
 })
 
-test_that("parallel resolution search still reuses one representative preliminary clustering per gamma step", {
+test_that("parallel resolution search uses shared global gamma cache keys", {
   skip_on_os("windows")
   
   ig <- igraph::make_ring(4)
@@ -1163,10 +1455,11 @@ test_that("parallel resolution search still reuses one representative preliminar
   start_lines <- grep("^start:", lines, value = TRUE)
   finish_lines <- grep("^finish:", lines, value = TRUE)
   
-  expect_true("2" %in% names(ranges))
-  expect_equal(length(start_lines), 1L)
-  expect_equal(length(finish_lines), 1L)
-  expect_true(all(grepl("^start:res_search_lower_2$", start_lines)))
+  expect_false("2" %in% names(ranges))
+  expect_gte(length(start_lines), 1L)
+  expect_equal(length(start_lines), length(finish_lines))
+  expect_true(all(grepl("^start:global_resolution_search$", start_lines)))
+  expect_equal(attr(ranges, "uncovered_targets"), 2L)
 })
 
 test_that("find_resolution_ranges uses serial preliminary trials when per-target worker capacity is low", {

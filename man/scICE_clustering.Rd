@@ -29,7 +29,10 @@ scICE_clustering(
 
 \item{graph_name}{Name of the graph to use for clustering. If NULL, will use the default SNN graph from the active assay (default: NULL)}
 
-\item{cluster_range}{Vector of cluster numbers to test (default: 1:20)}
+\item{cluster_range}{Vector of requested final merged cluster numbers to test
+(default: 1:20). In \code{cluster_range} mode, scICER keeps this set fixed
+and expands coverage only along the gamma axis via a shared global sweep;
+it no longer searches higher surrogate target cluster numbers.}
 
 \item{n_workers}{Number of parallel workers to use (default: 10)}
 
@@ -73,16 +76,18 @@ user-facing message.}
 \value{
 A list containing:
 \describe{
-  \item{gamma}{Resolution parameters for each cluster number}
+  \item{gamma}{Resolution parameters for each returned final cluster number}
   \item{labels}{Raw clustering arrays used for IC/MEI calculations (no small-cluster merge)}
-  \item{ic}{Inconsistency scores for each cluster number}
+  \item{ic}{Inconsistency scores for each returned final cluster number}
   \item{ic_vec}{Bootstrap IC distributions}
-  \item{n_cluster}{Number of clusters tested}
+  \item{n_cluster}{Returned final merged cluster counts in the main result object}
   \item{best_labels}{Final best labels after applying the \code{min_cluster_size} merge rule}
   \item{effective_cluster_median}{Median effective cluster count at the selected gamma}
   \item{raw_cluster_median}{Median raw cluster count at the selected gamma}
   \item{admission_mode}{Phase-2 admission family used for the selected gamma}
   \item{best_labels_raw_cluster_count}{Raw cluster count of the selected best trial before final merge}
+  \item{best_labels_final_cluster_count}{True final merged cluster count of the selected best trial}
+  \item{source_target_cluster}{Requested target cluster number that produced each returned final result}
   \item{n_iter}{Number of iterations used}
   \item{mei}{Mutual Element-wise Information scores}
   \item{consistent_clusters}{Cluster numbers meeting consistency threshold}
@@ -90,6 +95,15 @@ A list containing:
   \item{analysis_mode}{Whether the run used \code{"cluster_range"} or \code{"resolution"} mode}
   \item{resolution_input}{Manual gamma values requested by the user (if any)}
   \item{resolution_diagnostics}{Per-gamma evaluation summary for manual resolution mode}
+  \item{requested_cluster_range}{User-requested final merged cluster numbers in \code{cluster_range} mode}
+  \item{searched_target_cluster_range}{Target cluster numbers searched in \code{cluster_range} mode; after the shared gamma-sweep refactor this matches the requested final targets rather than an expanded surrogate target set}
+  \item{coverage_complete}{Whether every requested final merged cluster target is present in the returned main result object}
+  \item{search_coverage_complete}{Whether the shared gamma sweep resolved all requested targets tightly enough to hand off usable gamma intervals to optimization}
+  \item{resolution_search_diagnostics}{Per-gamma shared sweep diagnostic table with effective/raw/final cluster counts, refinement flags, and plateau-round markers}
+  \item{target_diagnostics}{One-row-per-requested-target diagnostic table with requested/searched targets, gamma interval bounds, selected gamma, IC, exclusion status, effective/raw/final medians, and result-status labels such as \code{selected_main_result}, \code{deduplicated}, \code{resolution_search_failed}, or \code{optimization_admission_failed}}
+  \item{plateau_stop}{Whether the shared gamma sweep stopped after consecutive plateau rounds without new coverage}
+  \item{uncovered_targets}{Requested final cluster targets that are missing from the returned main result object}
+  \item{search_uncovered_targets}{Requested final cluster targets that the shared gamma sweep did not resolve into optimization-ready gamma intervals}
   \item{best_cluster}{Cluster number with the lowest IC score among returned results}
   \item{best_resolution}{Gamma corresponding to \code{best_cluster}}
 }
@@ -104,9 +118,14 @@ and provides automated framework for finding consistent clusters.
 Workflow overview:
 \enumerate{
   \item extract a Seurat graph (for example \code{RNA_snn}) and convert to \pkg{igraph};
-  \item search resolution intervals for each requested cluster number;
+  \item in \code{cluster_range} mode, treat \code{cluster_range} as requested
+  final merged cluster counts, run a shared global gamma coarse-to-refine
+  sweep, and derive per-target gamma intervals from the observed
+  effective/raw/final count curves without expanding to surrogate target
+  cluster numbers;
   \item run repeated Leiden trials and bootstrap consistency scoring;
-  \item compute IC/MEI metrics and identify stable cluster numbers.
+  \item compute IC/MEI metrics, merge undersized final clusters if requested,
+  and key the main result object by the true final merged cluster counts.
 }
 
 Practical guidance:

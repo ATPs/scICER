@@ -12,6 +12,256 @@ emit_scice_notice <- function(message_text, verbose = FALSE) {
   }
 }
 
+append_target_results_dt <- function(existing_dt, new_dt) {
+  if (is.null(new_dt) || nrow(new_dt) == 0L) {
+    return(if (is.null(existing_dt)) empty_target_results_dt() else existing_dt)
+  }
+  if (is.null(existing_dt) || nrow(existing_dt) == 0L) {
+    return(data.table::copy(new_dt))
+  }
+  data.table::rbindlist(list(existing_dt, new_dt), fill = TRUE)
+}
+
+build_target_diagnostics_df <- function(target_results_dt, requested_cluster_range, gamma_dict = NULL) {
+  requested_cluster_range <- as.integer(requested_cluster_range)
+  searched_targets <- requested_cluster_range
+
+  lookup_bounds <- function(target_cluster) {
+    if (is.null(gamma_dict) || !(as.character(target_cluster) %in% names(gamma_dict))) {
+      return(c(NA_real_, NA_real_))
+    }
+    bounds <- as.numeric(gamma_dict[[as.character(target_cluster)]])
+    if (length(bounds) != 2L) {
+      return(c(NA_real_, NA_real_))
+    }
+    bounds
+  }
+  gamma_bounds <- t(vapply(
+    searched_targets,
+    lookup_bounds,
+    numeric(2)
+  ))
+
+  diagnostics_df <- data.frame(
+    requested_target_cluster = searched_targets,
+    searched_target_cluster = searched_targets,
+    requested_by_user = TRUE,
+    gamma_left = as.numeric(gamma_bounds[, 1]),
+    gamma_right = as.numeric(gamma_bounds[, 2]),
+    gamma = rep(NA_real_, length(searched_targets)),
+    ic = rep(NA_real_, length(searched_targets)),
+    effective_cluster_median = rep(NA_real_, length(searched_targets)),
+    raw_cluster_median = rep(NA_real_, length(searched_targets)),
+    final_cluster_median = rep(NA_real_, length(searched_targets)),
+    best_labels_raw_cluster_count = rep(NA_integer_, length(searched_targets)),
+    best_labels_final_cluster_count = rep(NA_integer_, length(searched_targets)),
+    excluded = rep(FALSE, length(searched_targets)),
+    exclusion_reason = rep("missing_target_result", length(searched_targets)),
+    selected_main_result = rep(FALSE, length(searched_targets)),
+    result_status = rep("missing_target_result", length(searched_targets)),
+    stringsAsFactors = FALSE
+  )
+
+  if (is.null(target_results_dt) || nrow(target_results_dt) == 0L) {
+    rownames(diagnostics_df) <- NULL
+    return(diagnostics_df)
+  }
+
+  target_results_dt <- data.table::as.data.table(data.table::copy(target_results_dt))
+  target_results_dt[, source_target_cluster := as.integer(source_target_cluster)]
+  if (!"result_status" %in% colnames(target_results_dt)) {
+    target_results_dt[, result_status := data.table::fifelse(
+      selected_main_result,
+      "selected_main_result",
+      data.table::fifelse(excluded, as.character(exclusion_reason), "deduplicated")
+    )]
+  }
+  target_results_dt[, diagnostics_priority := data.table::fcase(
+    result_status == "selected_main_result", 1L,
+    !excluded, 2L,
+    excluded, 3L,
+    default = 4L
+  )]
+  data.table::setorder(target_results_dt, source_target_cluster, diagnostics_priority, ic, gamma)
+  target_results_dt <- target_results_dt[, .SD[1], by = source_target_cluster]
+
+  matched_idx <- match(diagnostics_df$searched_target_cluster, target_results_dt$source_target_cluster)
+  has_match <- !is.na(matched_idx)
+
+  diagnostics_df$gamma[has_match] <- as.numeric(target_results_dt$gamma[matched_idx[has_match]])
+  diagnostics_df$ic[has_match] <- as.numeric(target_results_dt$ic[matched_idx[has_match]])
+  diagnostics_df$effective_cluster_median[has_match] <- as.numeric(target_results_dt$effective_cluster_median[matched_idx[has_match]])
+  diagnostics_df$raw_cluster_median[has_match] <- as.numeric(target_results_dt$raw_cluster_median[matched_idx[has_match]])
+  if ("final_cluster_median" %in% colnames(target_results_dt)) {
+    diagnostics_df$final_cluster_median[has_match] <- as.numeric(target_results_dt$final_cluster_median[matched_idx[has_match]])
+  }
+  diagnostics_df$best_labels_raw_cluster_count[has_match] <- as.integer(target_results_dt$best_labels_raw_cluster_count[matched_idx[has_match]])
+  diagnostics_df$best_labels_final_cluster_count[has_match] <- as.integer(target_results_dt$best_labels_final_cluster_count[matched_idx[has_match]])
+  diagnostics_df$excluded[has_match] <- as.logical(target_results_dt$excluded[matched_idx[has_match]])
+  diagnostics_df$exclusion_reason[has_match] <- as.character(target_results_dt$exclusion_reason[matched_idx[has_match]])
+  diagnostics_df$selected_main_result[has_match] <- as.logical(target_results_dt$selected_main_result[matched_idx[has_match]])
+  diagnostics_df$result_status[has_match] <- as.character(target_results_dt$result_status[matched_idx[has_match]])
+
+  missing_match <- !has_match
+  diagnostics_df$excluded[missing_match] <- TRUE
+  diagnostics_df$exclusion_reason[missing_match] <- ifelse(
+    is.na(diagnostics_df$gamma_left[missing_match]),
+    "resolution_search_failed",
+    "optimization_admission_failed"
+  )
+  diagnostics_df$result_status[missing_match] <- diagnostics_df$exclusion_reason[missing_match]
+
+  diagnostics_df <- data.frame(
+    requested_target_cluster = as.integer(diagnostics_df$requested_target_cluster),
+    searched_target_cluster = as.integer(diagnostics_df$searched_target_cluster),
+    requested_by_user = as.logical(diagnostics_df$requested_by_user),
+    gamma_left = as.numeric(diagnostics_df$gamma_left),
+    gamma_right = as.numeric(diagnostics_df$gamma_right),
+    gamma = as.numeric(diagnostics_df$gamma),
+    ic = as.numeric(diagnostics_df$ic),
+    effective_cluster_median = as.numeric(diagnostics_df$effective_cluster_median),
+    raw_cluster_median = as.numeric(diagnostics_df$raw_cluster_median),
+    final_cluster_median = as.numeric(diagnostics_df$final_cluster_median),
+    best_labels_raw_cluster_count = as.integer(diagnostics_df$best_labels_raw_cluster_count),
+    best_labels_final_cluster_count = as.integer(diagnostics_df$best_labels_final_cluster_count),
+    excluded = as.logical(diagnostics_df$excluded),
+    exclusion_reason = as.character(diagnostics_df$exclusion_reason),
+    selected_main_result = as.logical(diagnostics_df$selected_main_result),
+    result_status = as.character(diagnostics_df$result_status),
+    stringsAsFactors = FALSE
+  )
+  rownames(diagnostics_df) <- NULL
+  diagnostics_df
+}
+
+finalize_cluster_range_results <- function(target_results_dt, requested_cluster_range,
+                                           searched_target_cluster_range,
+                                           search_coverage_complete,
+                                           gamma_dict = NULL,
+                                           resolution_search_diagnostics = NULL,
+                                           plateau_stop = FALSE,
+                                           search_uncovered_targets = integer(0)) {
+  rekeyed_results <- rekey_target_results_by_final_cluster(target_results_dt)
+  result <- cluster_results_dt_to_list(rekeyed_results$main_results_dt)
+  result$requested_cluster_range <- as.integer(requested_cluster_range)
+  result$searched_target_cluster_range <- as.integer(searched_target_cluster_range)
+  result$search_coverage_complete <- isTRUE(search_coverage_complete)
+  result$resolution_search_diagnostics <- resolution_search_diagnostics
+  result$plateau_stop <- isTRUE(plateau_stop)
+  result$search_uncovered_targets <- as.integer(search_uncovered_targets)
+  result$uncovered_targets <- as.integer(setdiff(requested_cluster_range, as.integer(result$n_cluster)))
+  result$coverage_complete <- length(result$uncovered_targets) == 0L
+  result$target_diagnostics <- build_target_diagnostics_df(
+    rekeyed_results$target_results_dt,
+    requested_cluster_range = requested_cluster_range,
+    gamma_dict = gamma_dict
+  )
+  result
+}
+
+run_cluster_range_mode <- function(igraph_obj, requested_cluster_range, n_workers,
+                                   n_trials, n_bootstrap, seed, beta,
+                                   n_iterations, max_iterations,
+                                   objective_function, remove_threshold,
+                                   snn_graph, min_cluster_size,
+                                   resolution_tolerance, verbose,
+                                   runtime_context = NULL) {
+  requested_cluster_range <- sort(unique(as.integer(requested_cluster_range)))
+  searched_target_cluster_range <- requested_cluster_range
+  if (exists("clear_clustering_cache") && is.function(clear_clustering_cache)) {
+    clear_clustering_cache()
+  }
+
+  search_start_g <- if (objective_function == "modularity") {
+    -13
+  } else {
+    lower <- log(resolution_tolerance)
+    if (lower < -20) lower <- -20
+    lower
+  }
+  search_end_g <- 20
+
+  if (verbose) {
+    scice_message(
+      paste(
+        "  Cluster-range mode uses a shared gamma sweep for requested final targets:",
+        paste(requested_cluster_range, collapse = ", ")
+      )
+    )
+  }
+
+  gamma_dict <- find_resolution_ranges(
+    igraph_obj = igraph_obj,
+    cluster_range = requested_cluster_range,
+    start_g = search_start_g,
+    end_g = search_end_g,
+    objective_function = objective_function,
+    resolution_tolerance = resolution_tolerance,
+    n_workers = n_workers,
+    verbose = verbose,
+    seed = seed,
+    snn_graph = snn_graph,
+    min_cluster_size = min_cluster_size,
+    in_parallel_context = FALSE,
+    runtime_context = runtime_context
+  )
+  resolution_search_diagnostics <- attr(gamma_dict, "resolution_search_diagnostics")
+  coverage_complete <- isTRUE(attr(gamma_dict, "coverage_complete"))
+  plateau_stop <- isTRUE(attr(gamma_dict, "plateau_stop"))
+  uncovered_targets <- attr(gamma_dict, "uncovered_targets")
+  if (is.null(uncovered_targets)) {
+    uncovered_targets <- setdiff(requested_cluster_range, as.integer(names(gamma_dict)))
+  }
+
+  batch_results <- clustering_main(
+    igraph_obj = igraph_obj,
+    cluster_range = requested_cluster_range,
+    n_workers = n_workers,
+    n_trials = n_trials,
+    n_bootstrap = n_bootstrap,
+    seed = seed,
+    beta = beta,
+    n_iterations = n_iterations,
+    max_iterations = max_iterations,
+    objective_function = objective_function,
+    remove_threshold = remove_threshold,
+    snn_graph = snn_graph,
+    min_cluster_size = min_cluster_size,
+    resolution_tolerance = resolution_tolerance,
+    verbose = verbose,
+    in_parallel_context = FALSE,
+    runtime_context = runtime_context,
+    precomputed_gamma_dict = gamma_dict,
+    precomputed_resolution_search_diagnostics = resolution_search_diagnostics,
+    precomputed_coverage_complete = coverage_complete
+  )
+
+  final_results <- finalize_cluster_range_results(
+    target_results_dt = batch_results$target_results,
+    requested_cluster_range = requested_cluster_range,
+    searched_target_cluster_range = searched_target_cluster_range,
+    search_coverage_complete = coverage_complete,
+    gamma_dict = gamma_dict,
+    resolution_search_diagnostics = resolution_search_diagnostics,
+    plateau_stop = plateau_stop,
+    search_uncovered_targets = uncovered_targets
+  )
+
+  if (!isTRUE(final_results$coverage_complete) || length(final_results$uncovered_targets) > 0L) {
+    warning(
+      paste(
+        "scICE_clustering: requested final targets were not all recovered as returned final merged clusters;",
+        "highest requested target =", max(requested_cluster_range),
+        "| uncovered targets =",
+        if (length(final_results$uncovered_targets) > 0L) paste(final_results$uncovered_targets, collapse = ",") else "none"
+      ),
+      call. = FALSE
+    )
+  }
+
+  final_results
+}
+
 build_manual_resolution_results <- function(igraph_obj, resolution_values, n_workers,
                                             n_trials, n_bootstrap, seed, beta,
                                             n_iterations, objective_function,
@@ -102,6 +352,16 @@ build_manual_resolution_results <- function(igraph_obj, resolution_values, n_wor
   selected_mask <- rep(FALSE, length(resolution_results))
   selected_mask[selected_indices] <- TRUE
 
+  extract_final_cluster_median <- function(x) {
+    if (!is.null(x$final_cluster_median) && length(x$final_cluster_median) == 1L) {
+      return(as.numeric(x$final_cluster_median))
+    }
+    if (!is.null(x$best_labels_final_cluster_count) && length(x$best_labels_final_cluster_count) == 1L) {
+      return(as.numeric(x$best_labels_final_cluster_count))
+    }
+    NA_real_
+  }
+
   resolution_diagnostics <- data.frame(
     resolution = resolution_values,
     cluster_number = cluster_numbers,
@@ -114,6 +374,11 @@ build_manual_resolution_results <- function(igraph_obj, resolution_values, n_wor
     raw_cluster_median = vapply(
       resolution_results,
       function(x) as.numeric(x$raw_cluster_median),
+      numeric(1)
+    ),
+    final_cluster_median = vapply(
+      resolution_results,
+      extract_final_cluster_median,
       numeric(1)
     ),
     best_labels_raw_cluster_count = vapply(
@@ -159,15 +424,26 @@ build_manual_resolution_results <- function(igraph_obj, resolution_values, n_wor
       function(x) as.numeric(x$raw_cluster_median),
       numeric(1)
     ),
+    final_cluster_median = vapply(
+      selected_results,
+      extract_final_cluster_median,
+      numeric(1)
+    ),
     admission_mode = vapply(selected_results, function(x) as.character(x$admission_mode), character(1)),
     best_labels_raw_cluster_count = vapply(
       selected_results,
       function(x) as.integer(x$best_labels_raw_cluster_count),
       integer(1)
     ),
+    best_labels_final_cluster_count = vapply(
+      selected_results,
+      function(x) as.integer(x$best_labels_final_cluster_count),
+      integer(1)
+    ),
     n_iter = vapply(selected_results, function(x) as.integer(x$n_iterations), integer(1)),
     mei = lapply(selected_results, function(x) calculate_mei_from_array(x$labels)),
     k = vapply(selected_results, function(x) as.integer(x$k), integer(1)),
+    source_target_cluster = rep(NA_integer_, length(selected_results)),
     excluded = rep(FALSE, length(selected_results)),
     exclusion_reason = rep("none", length(selected_results)),
     resolution_diagnostics = resolution_diagnostics
@@ -186,9 +462,14 @@ build_manual_resolution_results <- function(igraph_obj, resolution_values, n_wor
 #' Workflow overview:
 #' \enumerate{
 #'   \item extract a Seurat graph (for example \code{RNA_snn}) and convert to \pkg{igraph};
-#'   \item search resolution intervals for each requested cluster number;
+#'   \item in \code{cluster_range} mode, treat \code{cluster_range} as requested
+#'   final merged cluster counts, run a shared global gamma coarse-to-refine
+#'   sweep, and derive per-target gamma intervals from the observed
+#'   effective/raw/final count curves without expanding to surrogate target
+#'   cluster numbers;
 #'   \item run repeated Leiden trials and bootstrap consistency scoring;
-#'   \item compute IC/MEI metrics and identify stable cluster numbers.
+#'   \item compute IC/MEI metrics, merge undersized final clusters if requested,
+#'   and key the main result object by the true final merged cluster counts.
 #' }
 #'
 #' Practical guidance:
@@ -203,7 +484,10 @@ build_manual_resolution_results <- function(igraph_obj, resolution_values, n_wor
 #'
 #' @param object A Seurat object containing single-cell data
 #' @param graph_name Name of the graph to use for clustering. If NULL, will use the default SNN graph from the active assay (default: NULL)
-#' @param cluster_range Vector of cluster numbers to test (default: 1:20)
+#' @param cluster_range Vector of requested final merged cluster numbers to test
+#'   (default: 1:20). In \code{cluster_range} mode, scICER keeps this set fixed
+#'   and expands coverage only along the gamma axis via a shared global sweep;
+#'   it no longer searches higher surrogate target cluster numbers.
 #' @param n_workers Number of parallel workers to use (default: 10)
 #' @param n_trials Number of clustering trials per resolution (default: 15)
 #' @param n_bootstrap Number of bootstrap iterations (default: 100)
@@ -232,16 +516,18 @@ build_manual_resolution_results <- function(igraph_obj, resolution_values, n_wor
 #'
 #' @return A list containing:
 #' \describe{
-#'   \item{gamma}{Resolution parameters for each cluster number}
+#'   \item{gamma}{Resolution parameters for each returned final cluster number}
 #'   \item{labels}{Raw clustering arrays used for IC/MEI calculations (no small-cluster merge)}
-#'   \item{ic}{Inconsistency scores for each cluster number}
+#'   \item{ic}{Inconsistency scores for each returned final cluster number}
 #'   \item{ic_vec}{Bootstrap IC distributions}
-#'   \item{n_cluster}{Number of clusters tested}
+#'   \item{n_cluster}{Returned final merged cluster counts in the main result object}
 #'   \item{best_labels}{Final best labels after applying the \code{min_cluster_size} merge rule}
 #'   \item{effective_cluster_median}{Median effective cluster count at the selected gamma}
 #'   \item{raw_cluster_median}{Median raw cluster count at the selected gamma}
 #'   \item{admission_mode}{Phase-2 admission family used for the selected gamma}
 #'   \item{best_labels_raw_cluster_count}{Raw cluster count of the selected best trial before final merge}
+#'   \item{best_labels_final_cluster_count}{True final merged cluster count of the selected best trial}
+#'   \item{source_target_cluster}{Requested target cluster number that produced each returned final result}
 #'   \item{n_iter}{Number of iterations used}
 #'   \item{mei}{Mutual Element-wise Information scores}
 #'   \item{consistent_clusters}{Cluster numbers meeting consistency threshold}
@@ -249,6 +535,15 @@ build_manual_resolution_results <- function(igraph_obj, resolution_values, n_wor
 #'   \item{analysis_mode}{Whether the run used \code{"cluster_range"} or \code{"resolution"} mode}
 #'   \item{resolution_input}{Manual gamma values requested by the user (if any)}
 #'   \item{resolution_diagnostics}{Per-gamma evaluation summary for manual resolution mode}
+#'   \item{requested_cluster_range}{User-requested final merged cluster numbers in \code{cluster_range} mode}
+#'   \item{searched_target_cluster_range}{Target cluster numbers searched in \code{cluster_range} mode; after the shared gamma-sweep refactor this matches the requested final targets rather than an expanded surrogate target set}
+#'   \item{coverage_complete}{Whether every requested final merged cluster target is present in the returned main result object}
+#'   \item{search_coverage_complete}{Whether the shared gamma sweep resolved all requested targets tightly enough to hand off usable gamma intervals to optimization}
+#'   \item{resolution_search_diagnostics}{Per-gamma shared sweep diagnostic table with effective/raw/final cluster counts, refinement flags, and plateau-round markers}
+#'   \item{target_diagnostics}{One-row-per-requested-target diagnostic table with requested/searched targets, gamma interval bounds, selected gamma, IC, exclusion status, effective/raw/final medians, and result-status labels such as \code{selected_main_result}, \code{deduplicated}, \code{resolution_search_failed}, or \code{optimization_admission_failed}}
+#'   \item{plateau_stop}{Whether the shared gamma sweep stopped after consecutive plateau rounds without new coverage}
+#'   \item{uncovered_targets}{Requested final cluster targets that are missing from the returned main result object}
+#'   \item{search_uncovered_targets}{Requested final cluster targets that the shared gamma sweep did not resolve into optimization-ready gamma intervals}
 #'   \item{best_cluster}{Cluster number with the lowest IC score among returned results}
 #'   \item{best_resolution}{Gamma corresponding to \code{best_cluster}}
 #' }
@@ -345,6 +640,22 @@ scICE_clustering <- function(object,
   min_cluster_size <- as.integer(round(min_cluster_size))
   if (min_cluster_size < 1L) {
     stop("min_cluster_size must be >= 1.")
+  }
+
+  if (!resolution_mode) {
+    if (!is.numeric(cluster_range) || length(cluster_range) == 0L) {
+      stop("cluster_range must be a non-empty numeric vector.")
+    }
+    if (anyNA(cluster_range) || any(!is.finite(cluster_range))) {
+      stop("cluster_range must contain only finite numeric values.")
+    }
+    if (any(abs(cluster_range - round(cluster_range)) > .Machine$double.eps^0.5)) {
+      stop("cluster_range must contain only integers >= 1.")
+    }
+    cluster_range <- sort(unique(as.integer(round(cluster_range))))
+    if (any(cluster_range < 1L)) {
+      stop("cluster_range must contain only integers >= 1.")
+    }
   }
 
   if (resolution_mode && cluster_range_was_supplied) {
@@ -536,9 +847,9 @@ scICE_clustering <- function(object,
       runtime_context = runtime_context
     )
   } else {
-    results <- clustering_main(
+    results <- run_cluster_range_mode(
       igraph_obj = igraph_obj,
-      cluster_range = cluster_range,
+      requested_cluster_range = cluster_range,
       n_workers = n_workers,
       n_trials = n_trials,
       n_bootstrap = n_bootstrap,
@@ -552,7 +863,6 @@ scICE_clustering <- function(object,
       min_cluster_size = min_cluster_size,
       resolution_tolerance = resolution_tolerance,
       verbose = verbose,
-      in_parallel_context = FALSE,
       runtime_context = runtime_context
     )
   }
@@ -568,10 +878,22 @@ scICE_clustering <- function(object,
     scice_message(paste("    - n_cluster length:", length(results$n_cluster)))
     scice_message(paste("    - effective_cluster_median length:", length(results$effective_cluster_median)))
     scice_message(paste("    - raw_cluster_median length:", length(results$raw_cluster_median)))
+    scice_message(paste("    - final_cluster_median length:", length(results$final_cluster_median)))
     scice_message(paste("    - admission_mode length:", length(results$admission_mode)))
     scice_message(paste("    - best_labels_raw_cluster_count length:", length(results$best_labels_raw_cluster_count)))
-    if (!is.null(results$excluded)) {
-      scice_message(paste("    - excluded info available:", sum(results$excluded), "excluded clusters"))
+    scice_message(paste("    - best_labels_final_cluster_count length:", length(results$best_labels_final_cluster_count)))
+    scice_message(paste("    - source_target_cluster length:", length(results$source_target_cluster)))
+    if (!is.null(results$target_diagnostics)) {
+      scice_message(paste("    - target diagnostics rows:", nrow(results$target_diagnostics)))
+    }
+    if (!is.null(results$resolution_search_diagnostics)) {
+      scice_message(paste("    - resolution search diagnostics rows:", nrow(results$resolution_search_diagnostics)))
+    }
+    if (!is.null(results$search_coverage_complete) && !is.na(results$search_coverage_complete)) {
+      scice_message(paste("    - search coverage complete:", results$search_coverage_complete))
+    }
+    if (!is.null(results$coverage_complete) && !is.na(results$coverage_complete)) {
+      scice_message(paste("    - coverage complete:", results$coverage_complete))
     }
   }
   
@@ -581,7 +903,13 @@ scICE_clustering <- function(object,
   results$analysis_mode <- if (resolution_mode) "resolution" else "cluster_range"
   results$resolution_input <- if (resolution_mode) resolution_input else NULL
   results$resolution_diagnostics <- if (resolution_mode) results$resolution_diagnostics else NULL
-  results$cluster_range_tested <- if (resolution_mode) results$n_cluster else cluster_range
+  results$resolution_search_diagnostics <- if (resolution_mode) NULL else results$resolution_search_diagnostics
+  results$requested_cluster_range <- if (resolution_mode) NULL else results$requested_cluster_range
+  results$searched_target_cluster_range <- if (resolution_mode) NULL else results$searched_target_cluster_range
+  results$search_coverage_complete <- if (resolution_mode) TRUE else isTRUE(results$search_coverage_complete)
+  results$coverage_complete <- if (resolution_mode) TRUE else isTRUE(results$coverage_complete)
+  results$target_diagnostics <- if (resolution_mode) NULL else results$target_diagnostics
+  results$cluster_range_tested <- results$n_cluster
   
   # Determine consistent clusters using actual cluster numbers, not indices
   if (verbose) {
@@ -614,15 +942,40 @@ scICE_clustering <- function(object,
       scice_message(paste("  Found", length(results$consistent_clusters), 
                     "consistent cluster numbers:", paste(results$consistent_clusters, collapse = ", ")))
       
-      # Report excluded clusters
-      excluded_clusters <- if (resolution_mode) {
-        integer(0)
+      target_diagnostics <- if (!resolution_mode) results$target_diagnostics else NULL
+      excluded_targets <- if (!is.null(target_diagnostics)) {
+        target_diagnostics$searched_target_cluster[target_diagnostics$excluded]
       } else {
-        setdiff(cluster_range, results$n_cluster)
+        integer(0)
       }
-      if (!resolution_mode && length(excluded_clusters) > 0) {
-        scice_message(paste("  Excluded", length(excluded_clusters), "cluster numbers due to instability:", 
-                      paste(excluded_clusters, collapse = ", ")))
+      if (!resolution_mode && length(excluded_targets) > 0) {
+        scice_message(paste(
+          "  Excluded", length(excluded_targets),
+          "searched target cluster numbers:",
+          paste(excluded_targets, collapse = ", ")
+        ))
+      }
+      if (!resolution_mode && !isTRUE(results$coverage_complete)) {
+        requested_max <- max(results$requested_cluster_range)
+        returned_max <- if (length(results$n_cluster) > 0L) max(results$n_cluster) else NA_integer_
+        scice_message(paste(
+          "  Coverage incomplete:",
+          "requested final max =", requested_max,
+          "| searched target max =", max(results$searched_target_cluster_range),
+          "| returned final max =", ifelse(is.na(returned_max), "NA", as.character(returned_max))
+        ))
+        if (!is.null(results$search_coverage_complete)) {
+          scice_message(paste(
+            "  Shared gamma sweep coverage complete:",
+            isTRUE(results$search_coverage_complete)
+          ))
+        }
+        if (!is.null(results$uncovered_targets) && length(results$uncovered_targets) > 0L) {
+          scice_message(paste(
+            "  Uncovered requested final targets:",
+            paste(results$uncovered_targets, collapse = ", ")
+          ))
+        }
       }
       if (resolution_mode && !is.null(results$resolution_diagnostics)) {
         deduplicated_count <- sum(!results$resolution_diagnostics$selected)
@@ -642,9 +995,20 @@ scICE_clustering <- function(object,
       
       # Detailed breakdown
       scice_message("  Detailed breakdown:")
-      scice_message(paste("    - Requested clusters:", if (resolution_mode) length(resolution_input) else length(cluster_range)))
-      scice_message(paste("    - Excluded clusters:", length(excluded_clusters)))
-      scice_message(paste("    - Tested clusters:", length(results$n_cluster)))
+      if (resolution_mode) {
+        scice_message(paste("    - Requested clusters:", length(resolution_input)))
+      } else {
+        scice_message(paste("    - Requested final cluster targets:", length(results$requested_cluster_range)))
+        scice_message(paste("    - Searched target clusters:", length(results$searched_target_cluster_range)))
+        if (!is.null(results$resolution_search_diagnostics)) {
+          scice_message(paste("    - Shared gamma probes:", nrow(results$resolution_search_diagnostics)))
+        }
+        if (!is.null(results$search_coverage_complete)) {
+          scice_message(paste("    - Shared gamma sweep coverage complete:", isTRUE(results$search_coverage_complete)))
+        }
+      }
+      scice_message(paste("    - Excluded searched targets:", if (resolution_mode) 0 else length(excluded_targets)))
+      scice_message(paste("    - Returned final clusters:", length(results$n_cluster)))
       scice_message(paste("    - Consistent clusters:", length(results$consistent_clusters)))
       scice_message(paste("    - Inconsistent clusters:", length(inconsistent_clusters)))
     }

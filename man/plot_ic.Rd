@@ -38,7 +38,7 @@ tested. Lower IC scores indicate more consistent clustering results.
 \code{plot_ic()} is typically the first diagnostic plot after
 \code{scICE_clustering()}:
 \itemize{
-  \item each x-position is a tested cluster number;
+  \item each x-position is a returned final merged cluster number;
   \item box/jitter values are bootstrap IC scores (\code{ic_vec});
   \item the threshold line marks your chosen consistency cutoff.
 }

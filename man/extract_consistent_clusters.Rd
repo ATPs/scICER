@@ -21,6 +21,7 @@ cluster numbers, IC scores, and other relevant statistics.
 \details{
 The summary includes per-cluster median IC and optimization metadata, and
 adds bootstrap confidence intervals when \code{ic_vec} is available.
+Here \code{cluster_number} refers to the returned final merged cluster count.
 
 For newer result objects containing exclusion metadata, aggregate counts
 (tested/excluded/inconsistent/consistent) are attached as attributes to the

@@ -15,7 +15,9 @@ This description matches the code on `main` after the raw-cluster-aware
 resolution search and gamma-admission updates on 2026-03-17, the
 `plot_ic()` gamma-label placement update on 2026-03-17, and the manual
 `resolution` mode update on 2026-03-17, plus the ECS/MEI correctness and
-Seurat readiness compatibility updates on 2026-03-18.
+Seurat readiness compatibility updates on 2026-03-18, and the
+final-merged-count rekeying plus cluster-range auto-expansion updates on
+2026-03-18.
 
 ## 1.1 Current Source Layout
 
@@ -61,10 +63,11 @@ organization.
 1. Validate inputs and initialize runtime context.
 2. Extract a Seurat graph and convert it to `igraph`.
 3. Choose one of two entry modes:
-   - `cluster_range` mode: for each target cluster number `k`, run a
-     raw-cluster-aware binary search to find a coarse gamma range, then
-     optionally clamp that range to a raw-cluster plateau/bracket near the
-     target.
+   - `cluster_range` mode: treat `cluster_range` as the user’s requested
+     **final merged** cluster numbers, run one shared global gamma
+     coarse-to-refine sweep, record effective/raw/final merged cluster-count
+     curves, and derive per-target gamma intervals from that shared sweep
+     without expanding to surrogate target cluster numbers.
    - `resolution` mode: skip gamma search entirely and evaluate the user’s
      supplied gamma values directly.
 4. Optionally filter unstable `k` values in `cluster_range` mode.
@@ -85,6 +88,13 @@ In `resolution` mode, all requested gamma values are stored in
 `resolution_diagnostics`, but the main result object is deduplicated by final
 cluster number so each returned `n_cluster` keeps only the lowest-IC gamma.
 
+In `cluster_range` mode, the main result object is also keyed by the true final
+merged cluster number. If multiple requested targets collapse to the same final
+merged cluster count after the final small-cluster merge, the main result keeps
+only the lowest-IC solution for that final count. The full requested-target
+trace is preserved separately in `target_diagnostics`, which always keeps one
+row per requested target even if optimization later fails for that target.
+
 More concretely, `resolution` mode is a fixed-gamma evaluation path, not a
 target-`k` replay path. The code first removes duplicated gamma values, then
 evaluates each remaining gamma directly, stores one diagnostic row per gamma in
@@ -104,6 +114,32 @@ Important: current implementation uses **effective cluster counting** when `min_
 - Raw cluster medians are used as guardrails during resolution search and as a
   bounded fallback family during gamma admission.
 - Final small-cluster merge is applied **once** and only to `best_labels`.
+- Public `n_cluster` values are then re-keyed to the true final merged cluster
+  counts from those `best_labels`, not to the internal searched targets.
+
+## 2.1 Final-Count-Keyed Result Semantics
+
+Cluster-range mode now has two different cluster-count concepts that must not be
+confused:
+
+- `requested target cluster`: the user-requested target `k` that resolution
+  search and optimization attempt to realize in final merged labels.
+- `final merged cluster count`: the number of clusters in the final
+  `best_labels` after applying the `min_cluster_size` merge rule.
+
+The public result object is keyed by the second quantity:
+
+- `n_cluster` is the returned final merged cluster count.
+- `best_labels_final_cluster_count` should always match `n_cluster`.
+- `source_target_cluster` records which requested target produced that returned
+  solution.
+- `target_diagnostics` keeps one row per requested target, including excluded
+  targets, optimization failures, and requested targets that were later
+  superseded by a lower-IC solution with the same final merged cluster count.
+
+This means a user-visible result is always truthful about the final labels: if
+a requested target of 9 ultimately merges down to 7 clusters, the main result is
+stored under 7, not 9.
 
 ## 3. Public API: Parameter-by-Parameter
 
@@ -151,15 +187,36 @@ scICE_clustering(
 
 ### 3.3 `cluster_range`
 
-- Meaning: target cluster numbers `k` to evaluate.
+- Meaning: requested **final merged** cluster numbers to evaluate.
 - Used by:
-  - resolution search (one range per `k`),
-  - optimization (one worker task per valid `k`),
-  - final consistency reporting.
+  - initial requested-target set,
+  - shared gamma sweep interval discovery for those requested targets,
+  - final consistency reporting keyed by true final merged counts.
 - Consequences of change:
   - larger range -> more total work,
-  - each additional `k` adds another full search + optimization branch.
-- Practical note: this argument is not heavily validated (for positivity/ordering) in current code, so pass a clean integer vector.
+  - each additional requested target `k` adds optimization work and may require
+    extra sweep refinement, but the search probes themselves are shared across
+    targets instead of running one full binary search per target.
+- Current behavior:
+  - the input is validated and normalized to a sorted unique positive integer
+    vector,
+  - the requested values remain the only searched targets,
+  - scICER expands coverage only on the gamma axis via a shared sweep,
+  - a target is considered covered only when the shared final-merged-count
+    curve brackets it tightly enough to assign an optimization-ready gamma
+    interval,
+  - coarse bracketing alone is not enough; refinement continues when a target
+    still lacks an exact or near-target probe and the interval remains too
+    wide for optimization admission,
+  - the sweep stops when all requested targets are optimization-ready, the
+    requested final maximum is covered, or two consecutive refinement rounds
+    add neither new optimization-ready targets nor a higher observed final
+    merged maximum,
+  - unresolved targets are returned in `search_uncovered_targets` with
+    `search_coverage_complete = FALSE` and a warning,
+  - the final public `coverage_complete` flag is stricter: it is `TRUE` only
+    when every requested target is present in the returned main result object
+    after optimization and final-count deduplication.
 
 ### 3.3.1 `resolution`
 
@@ -784,15 +841,16 @@ Resolution-search preliminary trial allocation details:
 
 ### 7.2 Approximate Leiden call budget
 
-Per target `k` (worst-case rough upper bound):
+Per shared gamma sweep round (worst-case rough upper bound):
 
 - Resolution search:
-  - coarse lower + upper binary search now costs about one representative Leiden
-    call per search step, not `search steps * n_preliminary_trials`,
-  - large graphs: up to about `30 + 30 = 60` representative preliminary runs,
-  - smaller graphs: up to about `50 + 50 = 100` representative preliminary runs,
-  - if `min_cluster_size > 1`, plateau clamp adds another probe pass:
-    typically 11 representative runs (or 5 for narrow large-graph cases).
+  - one representative Leiden call per unique gamma probe,
+  - initial coarse sweep typically evaluates 11 probes (or 5 for narrow
+    large-graph CPM ranges),
+  - each refinement round adds midpoint probes only for unresolved requested
+    final targets, with de-duplication across targets before scheduling,
+  - the sweep stops after at most two consecutive plateau rounds without new
+    coverage, so repeated high-cost per-target binary searches are avoided.
 - Optimization Phase 1:
   - `n_steps * n_trials` (typically `11 * n_trials`).
 - Phase 4:

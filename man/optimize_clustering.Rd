@@ -18,6 +18,7 @@ optimize_clustering(
   resolution_tolerance,
   n_workers,
   snn_graph = NULL,
+  gamma_seed_values = NULL,
   min_cluster_size = 1L,
   verbose = FALSE,
   worker_id = "OPTIMIZER",

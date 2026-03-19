@@ -34,7 +34,7 @@ Returned labels are converted to 1-based indexing for standard R usage.
 Output columns are:
 \itemize{
   \item \code{cell_id}: cell names from the original Seurat object;
-  \item \code{clusters_<k>}: robust labels for consistent cluster number \code{k}.
+  \item \code{clusters_<k>}: robust labels for returned final merged cluster number \code{k}.
 }
 
 If \code{return_seurat = TRUE}, these \code{clusters_<k>} columns are added to

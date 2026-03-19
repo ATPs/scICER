@@ -2,6 +2,37 @@
 #' @importFrom stats quantile median
 NULL
 
+get_scice_target_diagnostics <- function(scice_results) {
+  diagnostics <- scice_results$target_diagnostics
+  if (is.null(diagnostics) || !is.data.frame(diagnostics)) {
+    return(NULL)
+  }
+  diagnostics
+}
+
+get_excluded_target_clusters <- function(scice_results) {
+  diagnostics <- get_scice_target_diagnostics(scice_results)
+  if (!is.null(diagnostics) &&
+      all(c("searched_target_cluster", "excluded") %in% colnames(diagnostics))) {
+    return(as.integer(diagnostics$searched_target_cluster[diagnostics$excluded]))
+  }
+
+  if (!is.null(scice_results$excluded) &&
+      length(scice_results$excluded) == length(scice_results$n_cluster)) {
+    return(as.integer(scice_results$n_cluster[scice_results$excluded]))
+  }
+
+  integer(0)
+}
+
+get_tested_target_count <- function(scice_results) {
+  diagnostics <- get_scice_target_diagnostics(scice_results)
+  if (!is.null(diagnostics)) {
+    return(nrow(diagnostics))
+  }
+  length(scice_results$n_cluster)
+}
+
 #' Plot Inconsistency (IC) scores across different cluster numbers
 #'
 #' @description
@@ -12,7 +43,7 @@ NULL
 #' \code{plot_ic()} is typically the first diagnostic plot after
 #' \code{scICE_clustering()}:
 #' \itemize{
-#'   \item each x-position is a tested cluster number;
+#'   \item each x-position is a returned final merged cluster number;
 #'   \item box/jitter values are bootstrap IC scores (\code{ic_vec});
 #'   \item the threshold line marks your chosen consistency cutoff.
 #' }
@@ -111,14 +142,12 @@ plot_ic <- function(scice_results, threshold = 1.005, figure_size = c(10, 6),
     paste("Lower IC scores indicate more consistent clustering. Threshold:", threshold)
   )
   
-  if (has_exclusion_info) {
-    excluded_clusters <- scice_results$n_cluster[scice_results$excluded]
-    if (length(excluded_clusters) > 0) {
-      subtitle_parts <- c(
-        subtitle_parts,
-        paste("Excluded clusters:", paste(excluded_clusters, collapse = ", "))
-      )
-    }
+  excluded_clusters <- get_excluded_target_clusters(scice_results)
+  if (length(excluded_clusters) > 0) {
+    subtitle_parts <- c(
+      subtitle_parts,
+      paste("Excluded searched targets:", paste(excluded_clusters, collapse = ", "))
+    )
   }
   
   cluster_levels <- as.character(sort(unique(plot_data$cluster_number)))
@@ -223,7 +252,7 @@ plot_ic <- function(scice_results, threshold = 1.005, figure_size = c(10, 6),
 #' Output columns are:
 #' \itemize{
 #'   \item \code{cell_id}: cell names from the original Seurat object;
-#'   \item \code{clusters_<k>}: robust labels for consistent cluster number \code{k}.
+#'   \item \code{clusters_<k>}: robust labels for returned final merged cluster number \code{k}.
 #' }
 #'
 #' If \code{return_seurat = TRUE}, these \code{clusters_<k>} columns are added to
@@ -270,14 +299,10 @@ get_robust_labels <- function(scice_results, threshold = 1.005, return_seurat = 
   }
   
   if (length(consistent_indices) == 0) {
-    if (has_exclusion_info) {
-      excluded_clusters <- scice_results$n_cluster[scice_results$excluded]
-      if (length(excluded_clusters) > 0) {
-        warning(paste("No cluster numbers meet the consistency threshold.",
-                     "Excluded clusters:", paste(excluded_clusters, collapse = ", ")))
-      } else {
-        warning("No cluster numbers meet the consistency threshold")
-      }
+    excluded_clusters <- get_excluded_target_clusters(scice_results)
+    if (length(excluded_clusters) > 0) {
+      warning(paste("No cluster numbers meet the consistency threshold.",
+                   "Excluded searched targets:", paste(excluded_clusters, collapse = ", ")))
     } else {
       warning("No cluster numbers meet the consistency threshold")
     }
@@ -379,6 +404,7 @@ get_robust_labels <- function(scice_results, threshold = 1.005, return_seurat = 
 #' @details
 #' The summary includes per-cluster median IC and optimization metadata, and
 #' adds bootstrap confidence intervals when \code{ic_vec} is available.
+#' Here \code{cluster_number} refers to the returned final merged cluster count.
 #'
 #' For newer result objects containing exclusion metadata, aggregate counts
 #' (tested/excluded/inconsistent/consistent) are attached as attributes to the
@@ -409,14 +435,10 @@ extract_consistent_clusters <- function(scice_results, threshold = 1.005) {
   }
   
   if (length(consistent_indices) == 0) {
-    if (has_exclusion_info) {
-      excluded_clusters <- scice_results$n_cluster[scice_results$excluded]
-      if (length(excluded_clusters) > 0) {
-        warning(paste("No cluster numbers meet the consistency threshold.",
-                     "Excluded clusters:", paste(excluded_clusters, collapse = ", ")))
-      } else {
-        warning("No cluster numbers meet the consistency threshold")
-      }
+    excluded_clusters <- get_excluded_target_clusters(scice_results)
+    if (length(excluded_clusters) > 0) {
+      warning(paste("No cluster numbers meet the consistency threshold.",
+                   "Excluded searched targets:", paste(excluded_clusters, collapse = ", ")))
     } else {
       warning("No cluster numbers meet the consistency threshold")
     }
@@ -451,14 +473,16 @@ extract_consistent_clusters <- function(scice_results, threshold = 1.005) {
   
   # Add summary information as attributes
   if (has_exclusion_info) {
-    excluded_count <- sum(scice_results$excluded)
-    tested_count <- length(scice_results$n_cluster)
+    excluded_count <- length(get_excluded_target_clusters(scice_results))
+    tested_count <- get_tested_target_count(scice_results)
+    returned_count <- length(scice_results$n_cluster)
     consistent_count <- nrow(summary_df)
     
     attr(summary_df, "summary_info") <- list(
       total_tested = tested_count,
+      returned_final_clusters = returned_count,
       excluded = excluded_count,
-      inconsistent = tested_count - excluded_count - consistent_count,
+      inconsistent = returned_count - consistent_count,
       consistent = consistent_count,
       threshold_used = threshold
     )

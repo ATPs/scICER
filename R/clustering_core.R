@@ -3,6 +3,149 @@
 #' @importFrom data.table data.table rbindlist
 NULL
 
+empty_cluster_results_dt <- function() {
+  data.table::data.table(
+    cluster_number = integer(),
+    gamma = numeric(),
+    labels = list(),
+    ic = numeric(),
+    ic_vec = list(),
+    best_labels = list(),
+    effective_cluster_median = numeric(),
+    raw_cluster_median = numeric(),
+    final_cluster_median = numeric(),
+    admission_mode = character(),
+    best_labels_raw_cluster_count = integer(),
+    best_labels_final_cluster_count = integer(),
+    n_iter = integer(),
+    mei = list(),
+    k = integer(),
+    source_target_cluster = integer(),
+    excluded = logical(),
+    exclusion_reason = character(),
+    result_status = character()
+  )
+}
+
+empty_target_results_dt <- function() {
+  dt <- empty_cluster_results_dt()
+  dt$selected_main_result <- logical()
+  dt
+}
+
+select_lowest_ic_index <- function(ic_values) {
+  ic_values <- as.numeric(ic_values)
+  finite_indices <- which(is.finite(ic_values))
+  if (length(finite_indices) == 0L) {
+    return(1L)
+  }
+  finite_indices[[which.min(ic_values[finite_indices])]]
+}
+
+rekey_target_results_by_final_cluster <- function(target_results_dt) {
+  if (is.null(target_results_dt) || nrow(target_results_dt) == 0L) {
+    return(list(
+      main_results_dt = empty_cluster_results_dt(),
+      target_results_dt = empty_target_results_dt()
+    ))
+  }
+
+  target_results_dt <- data.table::copy(target_results_dt)
+  if (!"source_target_cluster" %in% colnames(target_results_dt)) {
+    target_results_dt[, source_target_cluster := as.integer(cluster_number)]
+  }
+  target_results_dt[, selected_main_result := FALSE]
+  target_results_dt[, target_row_id := seq_len(.N)]
+
+  candidate_rows <- target_results_dt[
+    !excluded & !is.na(best_labels_final_cluster_count)
+  ]
+
+  if (nrow(candidate_rows) == 0L) {
+    target_results_dt[, result_status := as.character(exclusion_reason)]
+    target_results_dt[, target_row_id := NULL]
+    return(list(
+      main_results_dt = empty_cluster_results_dt(),
+      target_results_dt = target_results_dt
+    ))
+  }
+
+  data.table::setorder(
+    candidate_rows,
+    best_labels_final_cluster_count,
+    source_target_cluster,
+    gamma
+  )
+
+  selected_row_ids <- candidate_rows[, {
+    chosen_idx <- select_lowest_ic_index(ic)
+    .(target_row_id = target_row_id[[chosen_idx]])
+  }, by = best_labels_final_cluster_count]$target_row_id
+
+  target_results_dt[target_row_id %in% selected_row_ids, selected_main_result := TRUE]
+  target_results_dt[
+    ,
+    result_status := data.table::fifelse(
+      selected_main_result,
+      "selected_main_result",
+      data.table::fifelse(excluded, as.character(exclusion_reason), "deduplicated")
+    )
+  ]
+
+  main_results_dt <- data.table::copy(
+    target_results_dt[selected_main_result == TRUE]
+  )
+  main_results_dt[, cluster_number := as.integer(best_labels_final_cluster_count)]
+  main_results_dt[, excluded := FALSE]
+  main_results_dt[, exclusion_reason := "none"]
+  main_results_dt[, result_status := "selected_main_result"]
+  main_results_dt[, selected_main_result := NULL]
+  main_results_dt[, target_row_id := NULL]
+  data.table::setorder(main_results_dt, cluster_number, source_target_cluster, gamma)
+
+  target_results_dt[, target_row_id := NULL]
+  data.table::setorder(target_results_dt, source_target_cluster)
+
+  list(
+    main_results_dt = main_results_dt,
+    target_results_dt = target_results_dt
+  )
+}
+
+cluster_results_dt_to_list <- function(results_dt, target_results_dt = NULL) {
+  if (is.null(results_dt) || nrow(results_dt) == 0L) {
+    results_dt <- empty_cluster_results_dt()
+  }
+
+  result <- list(
+    gamma = if ("gamma" %in% colnames(results_dt)) results_dt$gamma else numeric(0),
+    labels = if ("labels" %in% colnames(results_dt)) results_dt$labels else list(),
+    ic = if ("ic" %in% colnames(results_dt)) results_dt$ic else numeric(0),
+    ic_vec = if ("ic_vec" %in% colnames(results_dt)) results_dt$ic_vec else list(),
+    n_cluster = if ("cluster_number" %in% colnames(results_dt)) results_dt$cluster_number else integer(0),
+    best_labels = if ("best_labels" %in% colnames(results_dt)) results_dt$best_labels else list(),
+    effective_cluster_median = if ("effective_cluster_median" %in% colnames(results_dt)) results_dt$effective_cluster_median else numeric(0),
+    raw_cluster_median = if ("raw_cluster_median" %in% colnames(results_dt)) results_dt$raw_cluster_median else numeric(0),
+    final_cluster_median = if ("final_cluster_median" %in% colnames(results_dt)) results_dt$final_cluster_median else numeric(0),
+    admission_mode = if ("admission_mode" %in% colnames(results_dt)) results_dt$admission_mode else character(0),
+    best_labels_raw_cluster_count = if ("best_labels_raw_cluster_count" %in% colnames(results_dt)) results_dt$best_labels_raw_cluster_count else integer(0),
+    best_labels_final_cluster_count = if ("best_labels_final_cluster_count" %in% colnames(results_dt)) results_dt$best_labels_final_cluster_count else integer(0),
+    n_iter = if ("n_iter" %in% colnames(results_dt)) results_dt$n_iter else integer(0),
+    mei = if ("mei" %in% colnames(results_dt)) results_dt$mei else list(),
+    k = if ("k" %in% colnames(results_dt)) results_dt$k else integer(0),
+    source_target_cluster = if ("source_target_cluster" %in% colnames(results_dt)) results_dt$source_target_cluster else integer(0),
+    excluded = if ("excluded" %in% colnames(results_dt)) results_dt$excluded else logical(0),
+    exclusion_reason = if ("exclusion_reason" %in% colnames(results_dt)) results_dt$exclusion_reason else character(0),
+    result_status = if ("result_status" %in% colnames(results_dt)) results_dt$result_status else character(0)
+  )
+
+  if (!is.null(target_results_dt)) {
+    result$target_results <- target_results_dt
+  }
+
+  result
+}
+
 #' Core clustering algorithm implementing binary search and optimization
 #'
 #' @description
@@ -45,7 +188,10 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
                           n_trials, n_bootstrap, seed = NULL, beta, n_iterations, max_iterations, 
                           objective_function, remove_threshold, snn_graph = NULL,
                           min_cluster_size = 1L, resolution_tolerance, verbose, 
-                          in_parallel_context = FALSE, runtime_context = NULL) {
+                          in_parallel_context = FALSE, runtime_context = NULL,
+                          precomputed_gamma_dict = NULL,
+                          precomputed_resolution_search_diagnostics = NULL,
+                          precomputed_coverage_complete = NULL) {
   min_cluster_size <- max(1L, as.integer(min_cluster_size))
   if (min_cluster_size > 1L && is.null(snn_graph)) {
     stop("snn_graph must be provided when min_cluster_size > 1.")
@@ -74,23 +220,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   }
   
   # Initialize results storage using data.table for better performance
-  results_dt <- data.table::data.table(
-    cluster_number = integer(),
-    gamma = numeric(),
-    labels = list(),
-    ic = numeric(),
-    ic_vec = list(),
-    best_labels = list(),
-    effective_cluster_median = numeric(),
-    raw_cluster_median = numeric(),
-    admission_mode = character(),
-    best_labels_raw_cluster_count = integer(),
-    n_iter = integer(),
-    mei = list(),
-    k = integer(),
-    excluded = logical(),
-    exclusion_reason = character()
-  )
+  results_dt <- empty_target_results_dt()
   
   # Determine resolution search bounds
   if (objective_function == "modularity") {
@@ -102,25 +232,42 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
     end_g <- 20  # Increased for higher cluster numbers
   }
   
-  # Binary search for resolution ranges
   if (verbose) {
-    scice_message("CLUSTERING_MAIN: Starting binary search for resolution ranges...")
+    scice_message("CLUSTERING_MAIN: Starting resolution search...")
     scice_message(paste("CLUSTERING_MAIN: Objective function:", objective_function))
     scice_message(paste("CLUSTERING_MAIN: Search bounds: [", start_g, ", ", end_g, "]", sep = ""))
     scice_message(paste("CLUSTERING_MAIN: Target cluster range:", paste(cluster_range, collapse = ", ")))
     resolution_search_start <- Sys.time()
   }
-  
-  gamma_dict <- find_resolution_ranges(
-    igraph_obj, cluster_range, start_g, end_g, objective_function,
-    resolution_tolerance, n_workers, verbose, seed, snn_graph, min_cluster_size,
-    in_parallel_context, runtime_context
-  )
-  
+
+  if (is.null(precomputed_gamma_dict)) {
+    gamma_dict <- find_resolution_ranges(
+      igraph_obj, cluster_range, start_g, end_g, objective_function,
+      resolution_tolerance, n_workers, verbose, seed, snn_graph, min_cluster_size,
+      in_parallel_context, runtime_context
+    )
+    resolution_search_diagnostics <- attr(gamma_dict, "resolution_search_diagnostics")
+    search_coverage_complete <- attr(gamma_dict, "coverage_complete")
+  } else {
+    gamma_dict <- precomputed_gamma_dict
+    resolution_search_diagnostics <- precomputed_resolution_search_diagnostics
+    search_coverage_complete <- precomputed_coverage_complete
+  }
+  target_gamma_seeds <- attr(gamma_dict, "target_gamma_seeds")
+  if (is.null(target_gamma_seeds)) {
+    target_gamma_seeds <- setNames(vector("list", length(cluster_range)), as.character(cluster_range))
+  }
+
   if (verbose) {
     resolution_search_time <- as.numeric(difftime(Sys.time(), resolution_search_start, units = "secs"))
     scice_message(paste("CLUSTERING_MAIN: Resolution search completed in", round(resolution_search_time, 3), "seconds"))
     scice_message(paste("CLUSTERING_MAIN: Found resolution ranges for", length(gamma_dict), "cluster numbers"))
+    if (!is.null(resolution_search_diagnostics)) {
+      scice_message(paste("CLUSTERING_MAIN: Shared gamma probes evaluated:", nrow(resolution_search_diagnostics)))
+      if (!is.null(search_coverage_complete)) {
+        scice_message(paste("CLUSTERING_MAIN: Search coverage complete:", isTRUE(search_coverage_complete)))
+      }
+    }
     if (length(gamma_dict) > 0) {
       for (i in 1:min(5, length(gamma_dict))) {
         cluster_num <- names(gamma_dict)[i]
@@ -285,13 +432,18 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
         best_labels = list(NULL),
         effective_cluster_median = NA_real_,
         raw_cluster_median = NA_real_,
+        final_cluster_median = NA_real_,
         admission_mode = NA_character_,
         best_labels_raw_cluster_count = NA_integer_,
+        best_labels_final_cluster_count = NA_integer_,
         n_iter = NA_integer_,
         mei = list(NULL),
         k = NA_integer_,
+        source_target_cluster = x$cluster_num,
         excluded = TRUE,
-        exclusion_reason = x$reason
+        exclusion_reason = x$reason,
+        selected_main_result = FALSE,
+        result_status = x$reason
       ))
     }
     return(NULL)
@@ -302,24 +454,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   if (length(excluded_entries_list) > 0) {
     excluded_entries <- data.table::rbindlist(excluded_entries_list)
   } else {
-    # Create empty data.table with proper structure
-    excluded_entries <- data.table::data.table(
-      cluster_number = integer(),
-      gamma = numeric(),
-      labels = list(),
-      ic = numeric(),
-      ic_vec = list(),
-      best_labels = list(),
-      effective_cluster_median = numeric(),
-      raw_cluster_median = numeric(),
-      admission_mode = character(),
-      best_labels_raw_cluster_count = integer(),
-      n_iter = integer(),
-      mei = list(),
-      k = integer(),
-      excluded = logical(),
-      exclusion_reason = character()
-    )
+    excluded_entries <- empty_target_results_dt()
   }
   
   if (length(valid_clusters) == 0) {
@@ -329,24 +464,14 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
       scice_message("CLUSTERING_MAIN: This will result in empty IC results")
       scice_message("CLUSTERING_MAIN: Returning results with only excluded cluster information")
     }
-    # Return results with only excluded clusters
-    return(list(
-      gamma = excluded_entries$gamma,
-      labels = excluded_entries$labels,
-      ic = excluded_entries$ic,
-      ic_vec = excluded_entries$ic_vec,
-      n_cluster = excluded_entries$cluster_number,
-      best_labels = excluded_entries$best_labels,
-      effective_cluster_median = excluded_entries$effective_cluster_median,
-      raw_cluster_median = excluded_entries$raw_cluster_median,
-      admission_mode = excluded_entries$admission_mode,
-      best_labels_raw_cluster_count = excluded_entries$best_labels_raw_cluster_count,
-      n_iter = excluded_entries$n_iter,
-      mei = excluded_entries$mei,
-      k = excluded_entries$k,
-      excluded = excluded_entries$excluded,
-      exclusion_reason = excluded_entries$exclusion_reason
-    ))
+    rekeyed_results <- rekey_target_results_by_final_cluster(excluded_entries)
+    result <- cluster_results_dt_to_list(
+      rekeyed_results$main_results_dt,
+      target_results_dt = rekeyed_results$target_results_dt
+    )
+    result$resolution_search_diagnostics <- resolution_search_diagnostics
+    result$search_coverage_complete <- search_coverage_complete
+    return(result)
   }
   
   # Optimize clustering for each valid cluster number in parallel
@@ -432,7 +557,8 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
     result <- optimize_clustering(
       igraph_obj, cluster_num, gamma_range, objective_function,
       n_trials, n_bootstrap, seed, beta, n_iterations, max_iterations,
-      resolution_tolerance, cluster_worker_budget, snn_graph, min_cluster_size, verbose,
+      resolution_tolerance, cluster_worker_budget, snn_graph,
+      target_gamma_seeds[[as.character(cluster_num)]], min_cluster_size, verbose,
       worker_id, in_parallel_context = TRUE,
       runtime_context = runtime_context
     )
@@ -443,6 +569,30 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
     }
     
     if (!is.null(result)) {
+      if (!isTRUE(result$success)) {
+        return(data.table::data.table(
+          cluster_number = cluster_num,
+          gamma = result$gamma,
+          labels = list(NULL),
+          ic = NA_real_,
+          ic_vec = list(NULL),
+          best_labels = list(NULL),
+          effective_cluster_median = result$effective_cluster_median,
+          raw_cluster_median = result$raw_cluster_median,
+          final_cluster_median = result$final_cluster_median,
+          admission_mode = result$admission_mode,
+          best_labels_raw_cluster_count = result$best_labels_raw_cluster_count,
+          best_labels_final_cluster_count = result$best_labels_final_cluster_count,
+          n_iter = result$n_iterations,
+          mei = list(NULL),
+          k = result$k,
+          source_target_cluster = cluster_num,
+          excluded = TRUE,
+          exclusion_reason = result$failure_reason,
+          selected_main_result = FALSE,
+          result_status = result$failure_reason
+        ))
+      }
       # Calculate MEI scores
       mei_scores <- calculate_mei_from_array(result$labels)
       
@@ -456,13 +606,18 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
         best_labels = list(result$best_labels),
         effective_cluster_median = result$effective_cluster_median,
         raw_cluster_median = result$raw_cluster_median,
+        final_cluster_median = result$final_cluster_median,
         admission_mode = result$admission_mode,
         best_labels_raw_cluster_count = result$best_labels_raw_cluster_count,
+        best_labels_final_cluster_count = result$best_labels_final_cluster_count,
         n_iter = result$n_iterations,
         mei = list(mei_scores),
         k = result$k,
+        source_target_cluster = cluster_num,
         excluded = FALSE,
-        exclusion_reason = "none"
+        exclusion_reason = "none",
+        selected_main_result = FALSE,
+        result_status = "candidate"
       ))
     }
     return(NULL)
@@ -480,120 +635,22 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   if (length(successful_results_list) > 0) {
     successful_results <- data.table::rbindlist(successful_results_list, fill = TRUE)
   } else {
-    # Create empty data.table with proper structure
-    successful_results <- data.table::data.table(
-      cluster_number = integer(),
-      gamma = numeric(),
-      labels = list(),
-      ic = numeric(),
-      ic_vec = list(),
-      best_labels = list(),
-      effective_cluster_median = numeric(),
-      raw_cluster_median = numeric(),
-      admission_mode = character(),
-      best_labels_raw_cluster_count = integer(),
-      n_iter = integer(),
-      mei = list(),
-      k = integer(),
-      excluded = logical(),
-      exclusion_reason = character()
-    )
+    successful_results <- empty_target_results_dt()
   }
   
-  # Combine all results (excluded + successful) with robust error handling
+  # Combine all target-level results (excluded + successful)
   tryCatch({
-    if (nrow(excluded_entries) > 0 && nrow(successful_results) > 0) {
-      # Ensure both data.tables have compatible column structures
-      if (all(colnames(excluded_entries) %in% colnames(successful_results)) &&
-          all(colnames(successful_results) %in% colnames(excluded_entries))) {
-        results_dt <- data.table::rbindlist(list(excluded_entries, successful_results), fill = TRUE)
-      } else {
-        # If columns don't match, combine manually
-        all_cols <- union(colnames(excluded_entries), colnames(successful_results))
-        for (col in all_cols) {
-          if (!col %in% colnames(excluded_entries)) {
-            excluded_entries[[col]] <- switch(col,
-              "cluster_number" = integer(nrow(excluded_entries)),
-              "gamma" = numeric(nrow(excluded_entries)),
-              "labels" = rep(list(NULL), nrow(excluded_entries)),
-              "ic" = numeric(nrow(excluded_entries)),
-              "ic_vec" = rep(list(NULL), nrow(excluded_entries)),
-              "best_labels" = rep(list(NULL), nrow(excluded_entries)),
-              "effective_cluster_median" = rep(NA_real_, nrow(excluded_entries)),
-              "raw_cluster_median" = rep(NA_real_, nrow(excluded_entries)),
-              "admission_mode" = rep(NA_character_, nrow(excluded_entries)),
-              "best_labels_raw_cluster_count" = rep(NA_integer_, nrow(excluded_entries)),
-              "n_iter" = integer(nrow(excluded_entries)),
-              "mei" = rep(list(NULL), nrow(excluded_entries)),
-              "k" = integer(nrow(excluded_entries)),
-              "excluded" = logical(nrow(excluded_entries)),
-              "exclusion_reason" = character(nrow(excluded_entries)))
-          }
-          if (!col %in% colnames(successful_results)) {
-            successful_results[[col]] <- switch(col,
-              "cluster_number" = integer(nrow(successful_results)),
-              "gamma" = numeric(nrow(successful_results)),
-              "labels" = rep(list(NULL), nrow(successful_results)),
-              "ic" = numeric(nrow(successful_results)),
-              "ic_vec" = rep(list(NULL), nrow(successful_results)),
-              "best_labels" = rep(list(NULL), nrow(successful_results)),
-              "effective_cluster_median" = rep(NA_real_, nrow(successful_results)),
-              "raw_cluster_median" = rep(NA_real_, nrow(successful_results)),
-              "admission_mode" = rep(NA_character_, nrow(successful_results)),
-              "best_labels_raw_cluster_count" = rep(NA_integer_, nrow(successful_results)),
-              "n_iter" = integer(nrow(successful_results)),
-              "mei" = rep(list(NULL), nrow(successful_results)),
-              "k" = integer(nrow(successful_results)),
-              "excluded" = logical(nrow(successful_results)),
-              "exclusion_reason" = character(nrow(successful_results)))
-          }
-        }
-        results_dt <- data.table::rbindlist(list(excluded_entries, successful_results), fill = TRUE)
-      }
-    } else if (nrow(excluded_entries) > 0) {
-      results_dt <- excluded_entries
-    } else if (nrow(successful_results) > 0) {
-      results_dt <- successful_results
+    result_parts <- list(excluded_entries, successful_results)
+    result_parts <- result_parts[vapply(result_parts, nrow, integer(1)) > 0L]
+    if (length(result_parts) > 0L) {
+      results_dt <- data.table::rbindlist(result_parts, fill = TRUE)
     } else {
-      # Both are empty - create empty data.table with proper structure
-      results_dt <- data.table::data.table(
-        cluster_number = integer(),
-        gamma = numeric(),
-        labels = list(),
-        ic = numeric(),
-        ic_vec = list(),
-        best_labels = list(),
-        effective_cluster_median = numeric(),
-        raw_cluster_median = numeric(),
-        admission_mode = character(),
-        best_labels_raw_cluster_count = integer(),
-        n_iter = integer(),
-        mei = list(),
-        k = integer(),
-        excluded = logical(),
-        exclusion_reason = character()
-      )
+      results_dt <- empty_target_results_dt()
     }
   }, error = function(e) {
     warning("Error combining results, creating empty results: ", e$message)
-    results_dt <<- data.table::data.table(
-      cluster_number = integer(),
-      gamma = numeric(),
-      labels = list(),
-      ic = numeric(),
-      ic_vec = list(),
-      best_labels = list(),
-      effective_cluster_median = numeric(),
-      raw_cluster_median = numeric(),
-      admission_mode = character(),
-      best_labels_raw_cluster_count = integer(),
-      n_iter = integer(),
-      mei = list(),
-      k = integer(),
-      excluded = logical(),
-      exclusion_reason = character()
-    )
-     })
+    results_dt <<- empty_target_results_dt()
+  })
   
   # Sort by cluster number (only if the column exists and there are rows)
   if (nrow(results_dt) > 0 && "cluster_number" %in% colnames(results_dt)) {
@@ -605,7 +662,8 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
       all(c(
         "cluster_number", "gamma", "effective_cluster_median",
         "raw_cluster_median", "admission_mode",
-        "best_labels_raw_cluster_count", "excluded"
+        "best_labels_raw_cluster_count", "best_labels_final_cluster_count",
+        "excluded", "selected_main_result"
       ) %in% colnames(results_dt))) {
     format_diag_value <- function(x, digits = 6L) {
       if (length(x) == 0L || is.na(x)) {
@@ -641,7 +699,32 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
             is.na(results_dt$best_labels_raw_cluster_count[[row_idx]]),
             "NA",
             as.character(results_dt$best_labels_raw_cluster_count[[row_idx]])
-          )
+          ),
+          "- best_labels_final_clusters =", ifelse(
+            is.na(results_dt$best_labels_final_cluster_count[[row_idx]]),
+            "NA",
+            as.character(results_dt$best_labels_final_cluster_count[[row_idx]])
+          ),
+          "- selected_main_result =", results_dt$selected_main_result[[row_idx]]
+        )
+      )
+    }
+  }
+
+  rekeyed_results <- rekey_target_results_by_final_cluster(results_dt)
+
+  if (verbose &&
+      nrow(rekeyed_results$main_results_dt) > 0 &&
+      all(c("cluster_number", "source_target_cluster", "ic") %in% colnames(rekeyed_results$main_results_dt))) {
+    scice_message("CLUSTERING_MAIN: Final-count keyed main results:")
+    for (row_idx in seq_len(nrow(rekeyed_results$main_results_dt))) {
+      scice_message(
+        paste(
+          "CLUSTERING_MAIN:   final k =", rekeyed_results$main_results_dt$cluster_number[[row_idx]],
+          "- source target =", rekeyed_results$main_results_dt$source_target_cluster[[row_idx]],
+          "- IC =", round(rekeyed_results$main_results_dt$ic[[row_idx]], 4),
+          "- raw clusters =", rekeyed_results$main_results_dt$best_labels_raw_cluster_count[[row_idx]],
+          "- final clusters =", rekeyed_results$main_results_dt$best_labels_final_cluster_count[[row_idx]]
         )
       )
     }
@@ -654,22 +737,11 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
     scice_message(paste("CLUSTERING_MAIN: Cache provided", cache_stats_final$cache_entries, "reused clustering results"))
   }
   
-  # Convert back to list format for compatibility - with defensive programming
-  return(list(
-    gamma = if ("gamma" %in% colnames(results_dt)) results_dt$gamma else numeric(0),
-    labels = if ("labels" %in% colnames(results_dt)) results_dt$labels else list(),
-    ic = if ("ic" %in% colnames(results_dt)) results_dt$ic else numeric(0),
-    ic_vec = if ("ic_vec" %in% colnames(results_dt)) results_dt$ic_vec else list(),
-    n_cluster = if ("cluster_number" %in% colnames(results_dt)) results_dt$cluster_number else integer(0),
-    best_labels = if ("best_labels" %in% colnames(results_dt)) results_dt$best_labels else list(),
-    effective_cluster_median = if ("effective_cluster_median" %in% colnames(results_dt)) results_dt$effective_cluster_median else numeric(0),
-    raw_cluster_median = if ("raw_cluster_median" %in% colnames(results_dt)) results_dt$raw_cluster_median else numeric(0),
-    admission_mode = if ("admission_mode" %in% colnames(results_dt)) results_dt$admission_mode else character(0),
-    best_labels_raw_cluster_count = if ("best_labels_raw_cluster_count" %in% colnames(results_dt)) results_dt$best_labels_raw_cluster_count else integer(0),
-    n_iter = if ("n_iter" %in% colnames(results_dt)) results_dt$n_iter else integer(0),
-    mei = if ("mei" %in% colnames(results_dt)) results_dt$mei else list(),
-    k = if ("k" %in% colnames(results_dt)) results_dt$k else integer(0),
-    excluded = if ("excluded" %in% colnames(results_dt)) results_dt$excluded else logical(0),
-    exclusion_reason = if ("exclusion_reason" %in% colnames(results_dt)) results_dt$exclusion_reason else character(0)
-  ))
+  result <- cluster_results_dt_to_list(
+    rekeyed_results$main_results_dt,
+    target_results_dt = rekeyed_results$target_results_dt
+  )
+  result$resolution_search_diagnostics <- resolution_search_diagnostics
+  result$search_coverage_complete <- search_coverage_complete
+  return(result)
 }
