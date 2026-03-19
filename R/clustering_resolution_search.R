@@ -75,19 +75,24 @@ raw_cluster_search_upper <- function(target_clusters) {
 
 build_gamma_sequence_for_range <- function(gamma_range, objective_function,
                                            resolution_tolerance,
-                                           n_vertices = NA_integer_) {
+                                           n_vertices = NA_integer_,
+                                           n_steps = NULL) {
   gamma_range <- as.numeric(gamma_range)
   if (length(gamma_range) != 2L || anyNA(gamma_range) || any(!is.finite(gamma_range))) {
     stop("gamma_range must contain two finite numeric bounds.")
   }
 
-  range_width <- abs(gamma_range[2] - gamma_range[1])
-  n_steps <- if (!is.na(n_vertices) &&
-                 n_vertices >= 200000 &&
-                 range_width <= max(resolution_tolerance * 10, .Machine$double.eps)) {
-    5L
+  if (is.null(n_steps)) {
+    range_width <- abs(gamma_range[2] - gamma_range[1])
+    n_steps <- if (!is.na(n_vertices) &&
+                   n_vertices >= 200000 &&
+                   range_width <= max(resolution_tolerance * 10, .Machine$double.eps)) {
+      5L
+    } else {
+      11L
+    }
   } else {
-    11L
+    n_steps <- max(2L, as.integer(n_steps[[1]]))
   }
 
   if (objective_function == "modularity") {

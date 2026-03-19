@@ -3,7 +3,21 @@
 empty_resolution_search_diagnostics_df <- function() {
   data.frame(
     sweep_round = integer(),
+    discovery_round = integer(),
+    probe_stage = character(),
+    probe_index = integer(),
+    probe_pid = integer(),
+    probe_elapsed_sec = numeric(),
     gamma = numeric(),
+    upper_cap_discovery_gamma = numeric(),
+    degenerate_high_gamma = logical(),
+    scheduled_probe_workers = integer(),
+    coarse_probe_count = integer(),
+    discovered_upper_gamma = numeric(),
+    upper_cap_stop_reason = character(),
+    refinement_interval_width = numeric(),
+    refinement_interval_id = integer(),
+    refinement_points_per_interval = integer(),
     effective_cluster_count = numeric(),
     raw_cluster_count = numeric(),
     final_cluster_count = numeric(),
@@ -14,6 +28,33 @@ empty_resolution_search_diagnostics_df <- function() {
     plateau_round = integer(),
     stringsAsFactors = FALSE
   )
+}
+
+is_high_gamma_degenerate_probe <- function(effective_cluster_count, raw_cluster_count,
+                                           final_cluster_count, n_vertices) {
+  isTRUE(
+    is.finite(effective_cluster_count) &&
+      is.finite(raw_cluster_count) &&
+      is.finite(final_cluster_count) &&
+      effective_cluster_count == 0 &&
+      final_cluster_count == 1 &&
+      raw_cluster_count >= (0.98 * as.numeric(n_vertices))
+  )
+}
+
+build_cpm_discovery_batch_gamma_values <- function(current_gamma, hard_cap_gamma,
+                                                   batch_size, step_ratio = 4) {
+  current_gamma <- max(as.numeric(current_gamma), .Machine$double.xmin)
+  hard_cap_gamma <- max(as.numeric(hard_cap_gamma), current_gamma)
+  batch_size <- max(0L, as.integer(batch_size))
+  step_ratio <- max(1 + .Machine$double.eps, as.numeric(step_ratio))
+  if (batch_size <= 0L) {
+    return(numeric(0))
+  }
+  sort(unique(pmin(
+    current_gamma * (step_ratio ^ seq.int(0L, batch_size - 1L)),
+    hard_cap_gamma
+  )))
 }
 
 stabilize_monotone_probe_counts <- function(values) {
@@ -54,22 +95,172 @@ global_resolution_search_interval_small <- function(left, right, objective_funct
   }
 }
 
+global_resolution_search_interval_width <- function(left, right, objective_function) {
+  left <- as.numeric(left)
+  right <- as.numeric(right)
+  if (!is.finite(left) || !is.finite(right) || left >= right) {
+    return(NA_real_)
+  }
+  if (identical(objective_function, "CPM")) {
+    return(log(right) - log(left))
+  }
+  right - left
+}
+
+global_resolution_search_internal_points <- function(left, right, objective_function, n_points) {
+  left <- as.numeric(left)
+  right <- as.numeric(right)
+  n_points <- max(0L, as.integer(n_points))
+  if (n_points <= 0L || !is.finite(left) || !is.finite(right) || left >= right) {
+    return(numeric(0))
+  }
+  fractions <- seq_len(n_points) / (n_points + 1L)
+  if (identical(objective_function, "CPM")) {
+    return(exp(log(left) + fractions * (log(right) - log(left))))
+  }
+  left + fractions * (right - left)
+}
+
+build_refinement_probe_plan <- function(unresolved_intervals, objective_function,
+                                        resolution_tolerance, active_probe_workers,
+                                        existing_gamma_values = numeric(0)) {
+  interval_rows <- lapply(names(unresolved_intervals), function(name) {
+    interval <- unresolved_intervals[[name]]
+    if (is.null(interval) || length(interval) != 2L || any(!is.finite(interval))) {
+      return(NULL)
+    }
+    interval <- sort(as.numeric(interval))
+    if (interval[1] >= interval[2] ||
+        global_resolution_search_interval_small(
+          interval[1], interval[2], objective_function, resolution_tolerance
+        )) {
+      return(NULL)
+    }
+    data.table::data.table(
+      refinement_interval_id = as.integer(name),
+      gamma_left = interval[1],
+      gamma_right = interval[2],
+      refinement_interval_width = global_resolution_search_interval_width(
+        interval[1], interval[2], objective_function
+      )
+    )
+  })
+  intervals_dt <- data.table::rbindlist(interval_rows, fill = TRUE)
+  if (nrow(intervals_dt) == 0L) {
+    return(list(
+      probe_metadata = data.table::data.table(),
+      interval_summary = data.table::data.table()
+    ))
+  }
+
+  data.table::setorder(intervals_dt, -refinement_interval_width, refinement_interval_id)
+  n_intervals <- nrow(intervals_dt)
+  intervals_dt[, refinement_points_per_interval := 1L]
+
+  if (n_intervals < active_probe_workers) {
+    max_points_per_interval <- min(8L, max(1L, floor(active_probe_workers / n_intervals)))
+    max_extra_per_interval <- max(0L, max_points_per_interval - 1L)
+    remaining_points <- min(
+      max(0L, active_probe_workers - n_intervals),
+      n_intervals * max_extra_per_interval
+    )
+    while (remaining_points > 0L && any(intervals_dt$refinement_points_per_interval < max_points_per_interval)) {
+      for (idx in seq_len(nrow(intervals_dt))) {
+        if (remaining_points <= 0L) {
+          break
+        }
+        if (intervals_dt$refinement_points_per_interval[[idx]] < max_points_per_interval) {
+          data.table::set(intervals_dt, i = idx, j = "refinement_points_per_interval",
+                          value = intervals_dt$refinement_points_per_interval[[idx]] + 1L)
+          remaining_points <- remaining_points - 1L
+        }
+      }
+    }
+  }
+
+  probe_rows <- lapply(seq_len(nrow(intervals_dt)), function(idx) {
+    row <- intervals_dt[idx]
+    gammas <- global_resolution_search_internal_points(
+      left = row$gamma_left,
+      right = row$gamma_right,
+      objective_function = objective_function,
+      n_points = row$refinement_points_per_interval
+    )
+    if (length(gammas) == 0L) {
+      return(NULL)
+    }
+    data.table::data.table(
+      gamma = as.numeric(gammas),
+      refinement_interval_id = as.integer(row$refinement_interval_id),
+      refinement_interval_width = as.numeric(row$refinement_interval_width),
+      refinement_points_per_interval = as.integer(row$refinement_points_per_interval)
+    )
+  })
+  probe_metadata <- data.table::rbindlist(probe_rows, fill = TRUE)
+  if (nrow(probe_metadata) == 0L) {
+    return(list(
+      probe_metadata = data.table::data.table(),
+      interval_summary = intervals_dt
+    ))
+  }
+
+  data.table::setorder(probe_metadata, -refinement_interval_width, refinement_interval_id, gamma)
+  probe_metadata <- unique(probe_metadata, by = "gamma")
+  probe_metadata <- probe_metadata[!gamma %in% as.numeric(existing_gamma_values)]
+  data.table::setorder(probe_metadata, gamma)
+
+  list(
+    probe_metadata = probe_metadata,
+    interval_summary = intervals_dt
+  )
+}
+
 global_resolution_search_probe_batch <- function(igraph_obj, gamma_values, sweep_round,
                                                  objective_function, n_iter_preliminary,
                                                  beta_preliminary, requested_max,
                                                  min_cluster_size, snn_graph,
-                                                 active_probe_workers, verbose, seed) {
+                                                 active_probe_workers, verbose, seed,
+                                                 probe_stage = c("coarse", "refinement", "upper_cap_discovery"),
+                                                 coarse_probe_count = NA_integer_,
+                                                 probe_metadata = NULL) {
+  probe_stage <- match.arg(probe_stage)
   gamma_values <- sort(unique(as.numeric(gamma_values[is.finite(gamma_values)])))
   if (length(gamma_values) == 0L) {
     return(data.table::data.table())
   }
+  probe_metadata_dt <- if (is.null(probe_metadata)) {
+    data.table::data.table(gamma = gamma_values)
+  } else {
+    probe_metadata_dt <- data.table::as.data.table(probe_metadata)
+    if (!("gamma" %in% names(probe_metadata_dt))) {
+      stop("probe_metadata must contain a gamma column.")
+    }
+    probe_metadata_dt <- probe_metadata_dt[is.finite(gamma)]
+    probe_metadata_dt <- unique(probe_metadata_dt, by = "gamma")
+    missing_gamma_values <- setdiff(gamma_values, probe_metadata_dt$gamma)
+    if (length(missing_gamma_values) > 0L) {
+      probe_metadata_dt <- data.table::rbindlist(
+        list(
+          probe_metadata_dt,
+          data.table::data.table(gamma = as.numeric(missing_gamma_values))
+        ),
+        fill = TRUE
+      )
+    }
+    probe_metadata_dt
+  }
+  data.table::setorder(probe_metadata_dt, gamma)
+  probe_metadata_dt <- probe_metadata_dt[gamma %in% gamma_values]
+  gamma_values <- probe_metadata_dt$gamma
+  scheduled_probe_workers <- min(length(gamma_values), active_probe_workers)
 
   if (verbose) {
     scice_message(
       paste(
-        "RESOLUTION_SEARCH: Sweep round", sweep_round,
-        "- evaluating", length(gamma_values), "shared gamma probes with",
-        min(length(gamma_values), active_probe_workers), "worker(s)"
+        "RESOLUTION_SEARCH:",
+        if (identical(probe_stage, "upper_cap_discovery")) "Upper-cap discovery" else paste("Sweep round", sweep_round),
+        "- evaluating", length(gamma_values), paste0(probe_stage, " probe(s) with"),
+        scheduled_probe_workers, "worker(s)"
       )
     )
   }
@@ -78,6 +269,20 @@ global_resolution_search_probe_batch <- function(igraph_obj, gamma_values, sweep
     seq_along(gamma_values),
     function(idx) {
       gamma_val <- gamma_values[[idx]]
+      metadata_row <- probe_metadata_dt[idx]
+      probe_pid <- Sys.getpid()
+      probe_start <- Sys.time()
+      if (verbose) {
+        scice_message(
+          paste(
+            "RESOLUTION_SEARCH: Probe start - stage", probe_stage,
+            "| round", sweep_round,
+            "| probe", idx, "/", length(gamma_values),
+            "| gamma =", signif(gamma_val, 6),
+            "| pid =", probe_pid
+          )
+        )
+      }
       probe_seed <- NULL
       if (!is.null(seed)) {
         gamma_component <- if (is.finite(gamma_val)) {
@@ -124,24 +329,229 @@ global_resolution_search_probe_batch <- function(igraph_obj, gamma_values, sweep
         target_clusters = requested_max,
         min_cluster_size = min_cluster_size
       )
+      degenerate_high_gamma <- is_high_gamma_degenerate_probe(
+        effective_cluster_count = effective_count,
+        raw_cluster_count = raw_count,
+        final_cluster_count = final_count,
+        n_vertices = igraph::vcount(igraph_obj)
+      )
+      probe_elapsed_sec <- as.numeric(difftime(Sys.time(), probe_start, units = "secs"))
+      if (verbose) {
+        scice_message(
+          paste(
+            "RESOLUTION_SEARCH: Probe finish - stage", probe_stage,
+            "| round", sweep_round,
+            "| probe", idx, "/", length(gamma_values),
+            "| gamma =", signif(gamma_val, 6),
+            "| pid =", probe_pid,
+            "| elapsed =", round(probe_elapsed_sec, 3), "sec",
+            "| effective =", effective_count,
+            "| raw =", raw_count,
+            "| final =", final_count,
+            "| degenerate_high_gamma =", degenerate_high_gamma
+          )
+        )
+      }
       data.table::data.table(
         sweep_round = as.integer(sweep_round),
+        discovery_round = if ("discovery_round" %in% names(metadata_row)) as.integer(metadata_row$discovery_round) else NA_integer_,
+        probe_stage = as.character(probe_stage),
+        probe_index = as.integer(idx),
+        probe_pid = as.integer(probe_pid),
+        probe_elapsed_sec = as.numeric(probe_elapsed_sec),
         gamma = as.numeric(gamma_val),
+        upper_cap_discovery_gamma = if (identical(probe_stage, "upper_cap_discovery")) as.numeric(gamma_val) else NA_real_,
+        degenerate_high_gamma = isTRUE(degenerate_high_gamma),
+        scheduled_probe_workers = as.integer(scheduled_probe_workers),
+        coarse_probe_count = as.integer(coarse_probe_count),
+        discovered_upper_gamma = NA_real_,
+        upper_cap_stop_reason = NA_character_,
+        refinement_interval_width = if ("refinement_interval_width" %in% names(metadata_row)) as.numeric(metadata_row$refinement_interval_width) else NA_real_,
+        refinement_interval_id = if ("refinement_interval_id" %in% names(metadata_row)) as.integer(metadata_row$refinement_interval_id) else NA_integer_,
+        refinement_points_per_interval = if ("refinement_points_per_interval" %in% names(metadata_row)) as.integer(metadata_row$refinement_points_per_interval) else NA_integer_,
         effective_cluster_count = as.numeric(effective_count),
         raw_cluster_count = as.numeric(raw_count),
         final_cluster_count = as.numeric(final_count),
         raw_class = as.character(state$raw_class),
         over_fragmented = isTRUE(state$over_fragmented),
-        selected_for_refinement = sweep_round > 1L,
+        selected_for_refinement = identical(probe_stage, "refinement"),
         selected_for_target_interval = FALSE,
         plateau_round = 0L
       )
     },
-    mc.cores = min(length(gamma_values), active_probe_workers),
+    mc.cores = scheduled_probe_workers,
     mc.preschedule = FALSE
   )
+  probe_results_dt <- data.table::rbindlist(probe_results, fill = TRUE)
+  if (verbose && nrow(probe_results_dt) > 0L) {
+    scice_message(
+      paste(
+        "RESOLUTION_SEARCH: Sweep round", sweep_round,
+        "- completed", nrow(probe_results_dt), "probe(s)",
+        "| unique probe pid(s) =", length(unique(probe_results_dt$probe_pid)),
+        "| elapsed sec [min/median/max] =",
+        paste(
+          round(min(probe_results_dt$probe_elapsed_sec), 3),
+          round(stats::median(probe_results_dt$probe_elapsed_sec), 3),
+          round(max(probe_results_dt$probe_elapsed_sec), 3),
+          sep = "/"
+        )
+      )
+    )
+  }
 
-  data.table::rbindlist(probe_results, fill = TRUE)
+  probe_results_dt
+}
+
+discover_cpm_upper_gamma <- function(igraph_obj, gamma_bounds, requested_max,
+                                     n_iter_preliminary, beta_preliminary,
+                                     min_cluster_size, snn_graph,
+                                     active_probe_workers, verbose, seed) {
+  lower_gamma <- max(as.numeric(gamma_bounds[[1]]), .Machine$double.xmin)
+  hard_cap_gamma <- max(as.numeric(gamma_bounds[[2]]), lower_gamma)
+  current_gamma <- lower_gamma
+  batch_size <- min(max(1L, as.integer(active_probe_workers)), 6L)
+  discovery_step_ratio <- 4
+  discovery_results <- data.table::data.table()
+  seen_non_degenerate <- FALSE
+  consecutive_degenerate <- 0L
+  last_non_degenerate_gamma <- NA_real_
+  discovered_upper_gamma <- hard_cap_gamma
+  upper_cap_stop_reason <- "hard_cap"
+  discovery_round <- 0L
+
+  repeat {
+    discovery_round <- discovery_round + 1L
+    batch_gamma_values <- build_cpm_discovery_batch_gamma_values(
+      current_gamma = current_gamma,
+      hard_cap_gamma = hard_cap_gamma,
+      batch_size = batch_size,
+      step_ratio = discovery_step_ratio
+    )
+    batch_gamma_values <- batch_gamma_values[is.finite(batch_gamma_values)]
+    if (length(batch_gamma_values) == 0L) {
+      break
+    }
+    if (verbose) {
+      scice_message(
+        paste(
+          "RESOLUTION_SEARCH: Upper-cap discovery round", discovery_round,
+          "- batch size =", length(batch_gamma_values),
+          "| step ratio =", format(signif(discovery_step_ratio, 6)),
+          "| gamma values =",
+          paste(signif(batch_gamma_values, 6), collapse = ", ")
+        )
+      )
+    }
+    new_probe <- global_resolution_search_probe_batch(
+      igraph_obj = igraph_obj,
+      gamma_values = batch_gamma_values,
+      sweep_round = 0L,
+      objective_function = "CPM",
+      n_iter_preliminary = n_iter_preliminary,
+      beta_preliminary = beta_preliminary,
+      requested_max = requested_max,
+      min_cluster_size = min_cluster_size,
+      snn_graph = snn_graph,
+      active_probe_workers = active_probe_workers,
+      verbose = verbose,
+      seed = seed,
+      probe_stage = "upper_cap_discovery",
+      probe_metadata = data.table::data.table(
+        gamma = as.numeric(batch_gamma_values),
+        discovery_round = as.integer(discovery_round)
+      )
+    )
+    discovery_results <- data.table::rbindlist(list(discovery_results, new_probe), fill = TRUE)
+    discovery_results <- unique(discovery_results, by = "gamma")
+    data.table::setorder(discovery_results, gamma)
+    batch_rows <- new_probe[order(gamma)]
+    stop_found <- FALSE
+    for (idx in seq_len(nrow(batch_rows))) {
+      probe_row <- batch_rows[idx]
+      current_gamma_value <- as.numeric(probe_row$gamma)
+      current_degenerate <- isTRUE(probe_row$degenerate_high_gamma)
+      current_final <- as.numeric(probe_row$final_cluster_count)
+
+      if (!current_degenerate) {
+        seen_non_degenerate <- TRUE
+        consecutive_degenerate <- 0L
+        last_non_degenerate_gamma <- current_gamma_value
+        if (is.finite(current_final) && current_final >= requested_max) {
+          discovered_upper_gamma <- current_gamma_value
+          upper_cap_stop_reason <- "target_covered"
+          stop_found <- TRUE
+          break
+        }
+      } else if (seen_non_degenerate) {
+        consecutive_degenerate <- consecutive_degenerate + 1L
+        if (consecutive_degenerate >= 2L) {
+          discovered_upper_gamma <- last_non_degenerate_gamma
+          upper_cap_stop_reason <- "high_gamma_degenerate"
+          stop_found <- TRUE
+          break
+        }
+      }
+    }
+
+    if (stop_found) {
+      if (verbose) {
+        scice_message(
+          paste(
+            "RESOLUTION_SEARCH: Upper-cap discovery stop - round", discovery_round,
+            "| reason =", upper_cap_stop_reason,
+            "| discovered upper gamma =", signif(discovered_upper_gamma, 6)
+          )
+        )
+      }
+      break
+    }
+
+    batch_max_gamma <- max(batch_gamma_values)
+    if (batch_max_gamma >= hard_cap_gamma) {
+      last_batch_row <- batch_rows[.N]
+      discovered_upper_gamma <- if (seen_non_degenerate &&
+                                    is.finite(last_non_degenerate_gamma) &&
+                                    isTRUE(last_batch_row$degenerate_high_gamma)) {
+        last_non_degenerate_gamma
+      } else {
+        batch_max_gamma
+      }
+      upper_cap_stop_reason <- "hard_cap"
+      if (verbose) {
+        scice_message(
+          paste(
+            "RESOLUTION_SEARCH: Upper-cap discovery stop - round", discovery_round,
+            "| reason = hard_cap",
+            "| discovered upper gamma =", signif(discovered_upper_gamma, 6)
+          )
+        )
+      }
+      break
+    }
+
+    next_gamma <- min(batch_max_gamma * discovery_step_ratio, hard_cap_gamma)
+    if (!is.finite(next_gamma) || next_gamma <= batch_max_gamma) {
+      discovered_upper_gamma <- if (seen_non_degenerate && is.finite(last_non_degenerate_gamma)) {
+        last_non_degenerate_gamma
+      } else {
+        batch_max_gamma
+      }
+      upper_cap_stop_reason <- "hard_cap"
+      break
+    }
+    current_gamma <- next_gamma
+  }
+
+  discovered_upper_gamma <- min(max(discovered_upper_gamma, lower_gamma), hard_cap_gamma)
+  discovery_results[, discovered_upper_gamma := as.numeric(discovered_upper_gamma)]
+  discovery_results[, upper_cap_stop_reason := as.character(upper_cap_stop_reason)]
+
+  list(
+    probe_results = discovery_results,
+    discovered_upper_gamma = as.numeric(discovered_upper_gamma),
+    upper_cap_stop_reason = as.character(upper_cap_stop_reason)
+  )
 }
 
 derive_shared_gamma_intervals <- function(probes_dt, cluster_range, gamma_bounds) {
@@ -312,6 +722,9 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
     attr(gamma_dict, "uncovered_targets") <- integer(0)
     attr(gamma_dict, "target_gamma_seeds") <- setNames(list(), character(0))
     attr(gamma_dict, "target_interval_details") <- setNames(list(), character(0))
+    attr(gamma_dict, "discovered_upper_gamma") <- NA_real_
+    attr(gamma_dict, "upper_cap_stop_reason") <- NA_character_
+    attr(gamma_dict, "coarse_probe_count") <- NA_integer_
     return(gamma_dict)
   }
 
@@ -343,6 +756,10 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
     c(start_g, end_g)
   }
   requested_max <- max(cluster_range)
+  discovered_upper_gamma <- as.numeric(gamma_bounds[[2]])
+  upper_cap_stop_reason <- NA_character_
+  discovery_probe_results <- data.table::data.table()
+  coarse_probe_count <- as.integer(min(max(3L * active_probe_workers, 12L), 30L))
 
   if (verbose) {
     scice_message(
@@ -367,13 +784,47 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
     )
   }
 
+  if (identical(objective_function, "CPM")) {
+    discovery_state <- discover_cpm_upper_gamma(
+      igraph_obj = igraph_obj,
+      gamma_bounds = gamma_bounds,
+      requested_max = requested_max,
+      n_iter_preliminary = n_iter_preliminary,
+      beta_preliminary = beta_preliminary,
+      min_cluster_size = min_cluster_size,
+      snn_graph = snn_graph,
+      active_probe_workers = active_probe_workers,
+      verbose = verbose,
+      seed = seed
+    )
+    discovery_probe_results <- discovery_state$probe_results
+    discovered_upper_gamma <- discovery_state$discovered_upper_gamma
+    upper_cap_stop_reason <- discovery_state$upper_cap_stop_reason
+  }
+
+  if (verbose) {
+    scice_message(
+      paste(
+        "RESOLUTION_SEARCH: Initial coarse sweep - scheduled probe workers =", active_probe_workers,
+        "| coarse probe count =", coarse_probe_count,
+        "| discovered upper gamma =", signif(discovered_upper_gamma, 6),
+        "| upper-cap stop reason =",
+        ifelse(is.na(upper_cap_stop_reason), "not_applicable", upper_cap_stop_reason)
+      )
+    )
+  }
+
   all_probe_results <- global_resolution_search_probe_batch(
     igraph_obj = igraph_obj,
-    gamma_values = build_gamma_sequence_for_range(
-      gamma_range = gamma_bounds,
-      objective_function = objective_function,
-      resolution_tolerance = resolution_tolerance,
-      n_vertices = n_vertices
+    gamma_values = setdiff(
+      build_gamma_sequence_for_range(
+        gamma_range = c(gamma_bounds[[1]], discovered_upper_gamma),
+        objective_function = objective_function,
+        resolution_tolerance = resolution_tolerance,
+        n_vertices = n_vertices,
+        n_steps = coarse_probe_count
+      ),
+      discovery_probe_results$gamma
     ),
     sweep_round = 1L,
     objective_function = objective_function,
@@ -384,8 +835,14 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
     snn_graph = snn_graph,
     active_probe_workers = active_probe_workers,
     verbose = verbose,
-    seed = seed
+    seed = seed,
+    probe_stage = "coarse",
+    coarse_probe_count = coarse_probe_count
   )
+  all_probe_results <- data.table::rbindlist(list(discovery_probe_results, all_probe_results), fill = TRUE)
+  all_probe_results[, discovered_upper_gamma := as.numeric(discovered_upper_gamma)]
+  all_probe_results[, upper_cap_stop_reason := as.character(upper_cap_stop_reason)]
+  all_probe_results[, coarse_probe_count := as.integer(coarse_probe_count)]
   data.table::setorder(all_probe_results, gamma)
 
   interval_state <- derive_shared_gamma_intervals(all_probe_results, cluster_range, gamma_bounds)
@@ -414,29 +871,42 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
       break
     }
 
-    next_probe_values <- numeric(0)
-    for (target_clusters in interval_state$unresolved_targets) {
-      interval <- interval_state$unresolved_intervals[[as.character(target_clusters)]]
-      if (is.null(interval) || length(interval) != 2L || any(!is.finite(interval))) {
-        next
-      }
-      interval <- sort(as.numeric(interval))
-      if (interval[1] >= interval[2] ||
-          global_resolution_search_interval_small(
-            interval[1], interval[2], objective_function, resolution_tolerance
-          )) {
-        next
-      }
-      next_probe_values <- c(
-        next_probe_values,
-        global_resolution_search_midpoint(interval[1], interval[2], objective_function)
-      )
-    }
-    next_probe_values <- sort(unique(next_probe_values))
-    next_probe_values <- next_probe_values[!next_probe_values %in% all_probe_results$gamma]
+    refinement_plan <- build_refinement_probe_plan(
+      unresolved_intervals = interval_state$unresolved_intervals,
+      objective_function = objective_function,
+      resolution_tolerance = resolution_tolerance,
+      active_probe_workers = active_probe_workers,
+      existing_gamma_values = all_probe_results$gamma
+    )
+    next_probe_metadata <- refinement_plan$probe_metadata
+    interval_summary <- refinement_plan$interval_summary
+    next_probe_values <- as.numeric(next_probe_metadata$gamma)
 
     if (length(next_probe_values) == 0L) {
       break
+    }
+
+    if (verbose) {
+      interval_points_label <- if (nrow(interval_summary) > 0L) {
+        paste(
+          paste0(
+            interval_summary$refinement_interval_id,
+            ":",
+            interval_summary$refinement_points_per_interval
+          ),
+          collapse = ", "
+        )
+      } else {
+        "none"
+      }
+      scice_message(
+        paste(
+          "RESOLUTION_SEARCH: Sweep round", sweep_round,
+          "- unresolved intervals =", nrow(interval_summary),
+          "| planned refinement probes =", length(next_probe_values),
+          "| interval probe counts =", interval_points_label
+        )
+      )
     }
 
     new_probe_results <- global_resolution_search_probe_batch(
@@ -451,11 +921,17 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
       snn_graph = snn_graph,
       active_probe_workers = active_probe_workers,
       verbose = verbose,
-      seed = seed
+      seed = seed,
+      probe_stage = "refinement",
+      coarse_probe_count = coarse_probe_count,
+      probe_metadata = next_probe_metadata
     )
     all_probe_results <- data.table::rbindlist(list(all_probe_results, new_probe_results), fill = TRUE)
     all_probe_results <- unique(all_probe_results, by = "gamma")
     data.table::setorder(all_probe_results, gamma)
+    all_probe_results[, discovered_upper_gamma := as.numeric(discovered_upper_gamma)]
+    all_probe_results[, upper_cap_stop_reason := as.character(upper_cap_stop_reason)]
+    all_probe_results[, coarse_probe_count := as.integer(coarse_probe_count)]
 
     interval_state <- derive_shared_gamma_intervals(all_probe_results, cluster_range, gamma_bounds)
     current_max_final <- if (nrow(all_probe_results) > 0L) {
@@ -533,5 +1009,8 @@ find_resolution_ranges <- function(igraph_obj, cluster_range, start_g, end_g,
   attr(interval_state$gamma_dict, "uncovered_targets") <- as.integer(uncovered_targets)
   attr(interval_state$gamma_dict, "target_gamma_seeds") <- interval_state$target_gamma_seeds
   attr(interval_state$gamma_dict, "target_interval_details") <- interval_state$target_interval_details
+  attr(interval_state$gamma_dict, "discovered_upper_gamma") <- as.numeric(discovered_upper_gamma)
+  attr(interval_state$gamma_dict, "upper_cap_stop_reason") <- upper_cap_stop_reason
+  attr(interval_state$gamma_dict, "coarse_probe_count") <- as.integer(coarse_probe_count)
   interval_state$gamma_dict
 }

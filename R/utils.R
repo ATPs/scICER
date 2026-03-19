@@ -398,6 +398,18 @@ create_results_summary <- function(scice_results, threshold = 1.005) {
       paste("- Total searched targets:", if (has_target_diagnostics) nrow(target_diagnostics) else length(scice_results$n_cluster)),
       paste("- Total returned final clusters:", length(scice_results$n_cluster)),
       paste("- Shared gamma probes:", if (has_search_diagnostics) nrow(search_diagnostics) else 0),
+      paste(
+        "- Shared gamma coarse probe count:",
+        if (!is.null(scice_results$coarse_probe_count)) as.integer(scice_results$coarse_probe_count) else "unknown"
+      ),
+      paste(
+        "- Shared gamma discovered upper bound:",
+        if (!is.null(scice_results$discovered_upper_gamma)) signif(scice_results$discovered_upper_gamma, 6) else "unknown"
+      ),
+      paste(
+        "- Shared gamma upper-cap stop reason:",
+        if (!is.null(scice_results$upper_cap_stop_reason)) scice_results$upper_cap_stop_reason else "unknown"
+      ),
       paste("- Shared gamma sweep coverage complete:", if (!is.null(scice_results$search_coverage_complete)) isTRUE(scice_results$search_coverage_complete) else "unknown"),
       paste("- Coverage complete:", if (!is.null(scice_results$coverage_complete)) isTRUE(scice_results$coverage_complete) else "unknown"),
       paste("- Excluded searched targets:", length(excluded_targets))

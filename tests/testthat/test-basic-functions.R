@@ -1487,3 +1487,185 @@ test_that("find_resolution_ranges uses serial preliminary trials when per-target
   expect_true(any(grepl("Preliminary trial mode: serial", captured_messages, fixed = TRUE)))
   expect_true(any(grepl("Preliminary trial workers per gamma: 1", captured_messages, fixed = TRUE)))
 })
+
+test_that("find_resolution_ranges CPM upper-cap discovery stops at high-gamma degeneracy", {
+  ig <- igraph::make_ring(8)
+
+  local_mocked_bindings(
+    cached_leiden_clustering = function(igraph_obj, resolution, ...) {
+      if (resolution < 1e-5) {
+        return(c(rep(0L, 4), rep(1L, 4)))
+      }
+      0:7
+    },
+    .package = "scICER"
+  )
+
+  ranges <- suppressWarnings(scICER:::find_resolution_ranges(
+    igraph_obj = ig,
+    cluster_range = 6L,
+    start_g = log(1e-8),
+    end_g = 20,
+    objective_function = "CPM",
+    resolution_tolerance = 1e-8,
+    n_workers = 2,
+    verbose = FALSE,
+    snn_graph = Matrix::Diagonal(8),
+    min_cluster_size = 2L
+  ))
+
+  diagnostics <- attr(ranges, "resolution_search_diagnostics")
+  expect_equal(attr(ranges, "upper_cap_stop_reason"), "high_gamma_degenerate")
+  expect_equal(attr(ranges, "discovered_upper_gamma"), 2.56e-06, tolerance = 1e-12)
+  expect_equal(unique(diagnostics$probe_stage[diagnostics$probe_stage == "upper_cap_discovery"]),
+               "upper_cap_discovery")
+  expect_true(any(diagnostics$degenerate_high_gamma))
+  expect_true(all(table(diagnostics$discovery_round[diagnostics$probe_stage == "upper_cap_discovery"]) <= 2L))
+  expect_true(all(
+    diagnostics$gamma[diagnostics$probe_stage == "coarse"] <= attr(ranges, "discovered_upper_gamma") + 1e-12
+  ))
+})
+
+test_that("find_resolution_ranges CPM upper-cap discovery stops once requested max is covered", {
+  ig <- igraph::make_ring(12)
+
+  local_mocked_bindings(
+    cached_leiden_clustering = function(igraph_obj, resolution, ...) {
+      if (resolution < 1e-5) {
+        return(rep(0:1, each = 6))
+      }
+      if (resolution < 1e-4) {
+        return(rep(0:5, each = 2))
+      }
+      0:11
+    },
+    .package = "scICER"
+  )
+
+  ranges <- suppressWarnings(scICER:::find_resolution_ranges(
+    igraph_obj = ig,
+    cluster_range = 6L,
+    start_g = log(1e-8),
+    end_g = 20,
+    objective_function = "CPM",
+    resolution_tolerance = 1e-8,
+    n_workers = 6,
+    verbose = FALSE
+  ))
+
+  expect_equal(attr(ranges, "upper_cap_stop_reason"), "target_covered")
+  expect_equal(attr(ranges, "discovered_upper_gamma"), 1.024e-05, tolerance = 1e-12)
+  diagnostics <- attr(ranges, "resolution_search_diagnostics")
+  expect_equal(sum(diagnostics$probe_stage == "upper_cap_discovery"), 6L)
+  expect_true(all(table(diagnostics$discovery_round[diagnostics$probe_stage == "upper_cap_discovery"]) <= 6L))
+})
+
+test_that("build_cpm_discovery_batch_gamma_values narrows each discovery batch", {
+  batch_values <- scICER:::build_cpm_discovery_batch_gamma_values(
+    current_gamma = 1e-08,
+    hard_cap_gamma = exp(20),
+    batch_size = 8L,
+    step_ratio = 4
+  )
+
+  expect_length(batch_values, 8L)
+  expect_equal(batch_values[[1]], 1e-08, tolerance = 1e-16)
+  expect_equal(max(batch_values), 1.6384e-04, tolerance = 1e-12)
+  expect_true(all(diff(log(batch_values)) > 0))
+})
+
+test_that("find_resolution_ranges oversubscribes the first coarse sweep only", {
+  ig <- igraph::make_ring(6)
+  call_count <- 0L
+  scICER:::clear_clustering_cache()
+
+  local_mocked_bindings(
+    cached_leiden_clustering = function(igraph_obj, resolution, ...) {
+      call_count <<- call_count + 1L
+      if (resolution < 0.05) {
+        return(c(0L, 0L, 0L, 1L, 1L, 1L))
+      }
+      if (resolution > 0.05) {
+        return(c(0L, 0L, 1L, 2L, 3L, 3L))
+      }
+      c(0L, 0L, 1L, 1L, 2L, 2L)
+    },
+    .package = "scICER"
+  )
+
+  ranges <- scICER:::find_resolution_ranges(
+    igraph_obj = ig,
+    cluster_range = 3L,
+    start_g = 0,
+    end_g = 0.2,
+    objective_function = "modularity",
+    resolution_tolerance = 1e-3,
+    n_workers = 10,
+    verbose = FALSE
+  )
+
+  diagnostics <- attr(ranges, "resolution_search_diagnostics")
+  expect_equal(attr(ranges, "coarse_probe_count"), 30L)
+  expect_equal(sum(diagnostics$probe_stage == "coarse"), 30L)
+  expect_true(any(diagnostics$probe_stage == "refinement"))
+  expect_true(all(diagnostics$scheduled_probe_workers[diagnostics$probe_stage == "coarse"] == 10L))
+  expect_gte(nrow(diagnostics), 31L)
+})
+
+test_that("build_refinement_probe_plan densifies narrow intervals when workers exceed interval count", {
+  plan <- scICER:::build_refinement_probe_plan(
+    unresolved_intervals = list(
+      "9" = c(1e-06, 2e-06),
+      "10" = c(8e-06, 1.2e-05)
+    ),
+    objective_function = "CPM",
+    resolution_tolerance = 1e-08,
+    active_probe_workers = 10L,
+    existing_gamma_values = numeric(0)
+  )
+
+  probe_metadata <- plan$probe_metadata
+  interval_summary <- plan$interval_summary
+
+  expect_equal(nrow(interval_summary), 2L)
+  expect_gt(nrow(probe_metadata), 2L)
+  expect_lte(nrow(probe_metadata), 10L)
+  expect_true(all(interval_summary$refinement_points_per_interval == 5L))
+  expect_true(all(probe_metadata$refinement_points_per_interval == 5L))
+  expect_true(all(probe_metadata$gamma > min(c(1e-06, 8e-06))))
+})
+
+test_that("find_resolution_ranges refinement emits more than one probe per interval when gamma narrows", {
+  ig <- igraph::make_ring(6)
+
+  local_mocked_bindings(
+    cached_leiden_clustering = function(igraph_obj, resolution, ...) {
+      if (resolution < 0.04) {
+        return(c(0L, 0L, 0L, 1L, 1L, 1L))
+      }
+      if (resolution < 0.08) {
+        return(c(0L, 0L, 1L, 1L, 2L, 2L))
+      }
+      c(0L, 1L, 2L, 3L, 4L, 5L)
+    },
+    .package = "scICER"
+  )
+
+  ranges <- scICER:::find_resolution_ranges(
+    igraph_obj = ig,
+    cluster_range = c(4L, 5L),
+    start_g = 0,
+    end_g = 0.2,
+    objective_function = "modularity",
+    resolution_tolerance = 1e-3,
+    n_workers = 10,
+    verbose = FALSE
+  )
+
+  diagnostics <- attr(ranges, "resolution_search_diagnostics")
+  refinement_round2 <- diagnostics[diagnostics$probe_stage == "refinement" & diagnostics$sweep_round == 2L, ]
+  expect_gt(nrow(refinement_round2), 2L)
+  expect_true(all(is.finite(refinement_round2$refinement_interval_width)))
+  expect_true(all(refinement_round2$refinement_points_per_interval >= 1L))
+  expect_true(any(refinement_round2$refinement_points_per_interval > 1L))
+})

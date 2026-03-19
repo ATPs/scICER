@@ -202,6 +202,20 @@ scICE_clustering(
     vector,
   - the requested values remain the only searched targets,
   - scICER expands coverage only on the gamma axis via a shared sweep,
+  - for `CPM`, the sweep no longer starts with a fixed visible upper bound of
+    `exp(20)`; it first performs an upper-cap discovery pass that grows gamma
+    by a narrower `x4` geometric ladder in parallel batches (up to 6 probes
+    per discovery round) until the requested final maximum is covered, two
+    consecutive high-gamma degenerate probes are seen after a non-degenerate
+    region, or the internal hard cap is hit,
+  - the first coarse sweep oversubscribes probe count relative to available
+    probe workers (`min(max(3 * workers, 12), 30)`), so short-lived probes can
+    free workers for later gamma values in the same round,
+  - refinement is no longer restricted to one midpoint per unresolved interval;
+    when the number of unresolved intervals is below the available worker
+    budget, each unresolved interval is internally densified with multiple
+    evenly spaced probe points (up to 8 per interval, still capped by the
+    active worker count),
   - a target is considered covered only when the shared final-merged-count
     curve brackets it tightly enough to assign an optimization-ready gamma
     interval,
@@ -214,6 +228,10 @@ scICE_clustering(
     merged maximum,
   - unresolved targets are returned in `search_uncovered_targets` with
     `search_coverage_complete = FALSE` and a warning,
+  - search diagnostics now record `probe_stage`, per-probe elapsed/pid,
+    `discovery_round`, `degenerate_high_gamma`, `discovered_upper_gamma`,
+    `upper_cap_stop_reason`, `coarse_probe_count`, and refinement interval
+    widths / per-interval probe allocations,
   - the final public `coverage_complete` flag is stricter: it is `TRUE` only
     when every requested target is present in the returned main result object
     after optimization and final-count deduplication.

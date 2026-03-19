@@ -140,7 +140,10 @@ finalize_cluster_range_results <- function(target_results_dt, requested_cluster_
                                            gamma_dict = NULL,
                                            resolution_search_diagnostics = NULL,
                                            plateau_stop = FALSE,
-                                           search_uncovered_targets = integer(0)) {
+                                           search_uncovered_targets = integer(0),
+                                           discovered_upper_gamma = NULL,
+                                           upper_cap_stop_reason = NULL,
+                                           coarse_probe_count = NULL) {
   rekeyed_results <- rekey_target_results_by_final_cluster(target_results_dt)
   result <- cluster_results_dt_to_list(rekeyed_results$main_results_dt)
   result$requested_cluster_range <- as.integer(requested_cluster_range)
@@ -149,6 +152,9 @@ finalize_cluster_range_results <- function(target_results_dt, requested_cluster_
   result$resolution_search_diagnostics <- resolution_search_diagnostics
   result$plateau_stop <- isTRUE(plateau_stop)
   result$search_uncovered_targets <- as.integer(search_uncovered_targets)
+  result$discovered_upper_gamma <- if (length(discovered_upper_gamma) == 1L) as.numeric(discovered_upper_gamma) else NULL
+  result$upper_cap_stop_reason <- if (length(upper_cap_stop_reason) == 1L) as.character(upper_cap_stop_reason) else NULL
+  result$coarse_probe_count <- if (length(coarse_probe_count) == 1L) as.integer(coarse_probe_count) else NULL
   result$uncovered_targets <- as.integer(setdiff(requested_cluster_range, as.integer(result$n_cluster)))
   result$coverage_complete <- length(result$uncovered_targets) == 0L
   result$target_diagnostics <- build_target_diagnostics_df(
@@ -209,6 +215,9 @@ run_cluster_range_mode <- function(igraph_obj, requested_cluster_range, n_worker
   coverage_complete <- isTRUE(attr(gamma_dict, "coverage_complete"))
   plateau_stop <- isTRUE(attr(gamma_dict, "plateau_stop"))
   uncovered_targets <- attr(gamma_dict, "uncovered_targets")
+  discovered_upper_gamma <- attr(gamma_dict, "discovered_upper_gamma")
+  upper_cap_stop_reason <- attr(gamma_dict, "upper_cap_stop_reason")
+  coarse_probe_count <- attr(gamma_dict, "coarse_probe_count")
   if (is.null(uncovered_targets)) {
     uncovered_targets <- setdiff(requested_cluster_range, as.integer(names(gamma_dict)))
   }
@@ -244,7 +253,10 @@ run_cluster_range_mode <- function(igraph_obj, requested_cluster_range, n_worker
     gamma_dict = gamma_dict,
     resolution_search_diagnostics = resolution_search_diagnostics,
     plateau_stop = plateau_stop,
-    search_uncovered_targets = uncovered_targets
+    search_uncovered_targets = uncovered_targets,
+    discovered_upper_gamma = discovered_upper_gamma,
+    upper_cap_stop_reason = upper_cap_stop_reason,
+    coarse_probe_count = coarse_probe_count
   )
 
   if (!isTRUE(final_results$coverage_complete) || length(final_results$uncovered_targets) > 0L) {
@@ -539,7 +551,10 @@ build_manual_resolution_results <- function(igraph_obj, resolution_values, n_wor
 #'   \item{searched_target_cluster_range}{Target cluster numbers searched in \code{cluster_range} mode; after the shared gamma-sweep refactor this matches the requested final targets rather than an expanded surrogate target set}
 #'   \item{coverage_complete}{Whether every requested final merged cluster target is present in the returned main result object}
 #'   \item{search_coverage_complete}{Whether the shared gamma sweep resolved all requested targets tightly enough to hand off usable gamma intervals to optimization}
-#'   \item{resolution_search_diagnostics}{Per-gamma shared sweep diagnostic table with effective/raw/final cluster counts, refinement flags, and plateau-round markers}
+#'   \item{resolution_search_diagnostics}{Per-gamma shared sweep diagnostic table with probe stage, discovery-round labels, effective/raw/final cluster counts, high-gamma-degeneracy markers, coarse-sweep metadata, refinement-interval widths and allocations, refinement flags, and plateau-round markers}
+#'   \item{discovered_upper_gamma}{Shared gamma sweep upper bound discovered before the first coarse sweep in \code{cluster_range} mode}
+#'   \item{upper_cap_stop_reason}{Reason the shared gamma upper-cap discovery stopped; typically \code{target_covered}, \code{high_gamma_degenerate}, or \code{hard_cap}}
+#'   \item{coarse_probe_count}{Number of probe gamma values used in the first shared coarse sweep}
 #'   \item{target_diagnostics}{One-row-per-requested-target diagnostic table with requested/searched targets, gamma interval bounds, selected gamma, IC, exclusion status, effective/raw/final medians, and result-status labels such as \code{selected_main_result}, \code{deduplicated}, \code{resolution_search_failed}, or \code{optimization_admission_failed}}
 #'   \item{plateau_stop}{Whether the shared gamma sweep stopped after consecutive plateau rounds without new coverage}
 #'   \item{uncovered_targets}{Requested final cluster targets that are missing from the returned main result object}

@@ -99,7 +99,10 @@ A list containing:
   \item{searched_target_cluster_range}{Target cluster numbers searched in \code{cluster_range} mode; after the shared gamma-sweep refactor this matches the requested final targets rather than an expanded surrogate target set}
   \item{coverage_complete}{Whether every requested final merged cluster target is present in the returned main result object}
   \item{search_coverage_complete}{Whether the shared gamma sweep resolved all requested targets tightly enough to hand off usable gamma intervals to optimization}
-  \item{resolution_search_diagnostics}{Per-gamma shared sweep diagnostic table with effective/raw/final cluster counts, refinement flags, and plateau-round markers}
+  \item{resolution_search_diagnostics}{Per-gamma shared sweep diagnostic table with probe stage, discovery-round labels, effective/raw/final cluster counts, high-gamma-degeneracy markers, coarse-sweep metadata, refinement-interval widths and allocations, refinement flags, and plateau-round markers}
+  \item{discovered_upper_gamma}{Shared gamma sweep upper bound discovered before the first coarse sweep in \code{cluster_range} mode}
+  \item{upper_cap_stop_reason}{Reason the shared gamma upper-cap discovery stopped; typically \code{target_covered}, \code{high_gamma_degenerate}, or \code{hard_cap}}
+  \item{coarse_probe_count}{Number of probe gamma values used in the first shared coarse sweep}
   \item{target_diagnostics}{One-row-per-requested-target diagnostic table with requested/searched targets, gamma interval bounds, selected gamma, IC, exclusion status, effective/raw/final medians, and result-status labels such as \code{selected_main_result}, \code{deduplicated}, \code{resolution_search_failed}, or \code{optimization_admission_failed}}
   \item{plateau_stop}{Whether the shared gamma sweep stopped after consecutive plateau rounds without new coverage}
   \item{uncovered_targets}{Requested final cluster targets that are missing from the returned main result object}
