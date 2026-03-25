@@ -10,6 +10,8 @@
 
 The AnnData/Python counterpart is [**scICEpy**](https://github.com/ATPs/scICEpy).
 
+Implementation details are documented in [`design.md`](./design.md).
+
 ### Key Features
 
 - 🔬 **Automated Cluster Evaluation**: Systematically tests multiple cluster numbers to find consistent results
