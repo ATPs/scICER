@@ -1025,3 +1025,186 @@ scICE_clustering
                  -> calculate_ecs
   -> consistency post-processing (ic_threshold)
 ```
+
+---
+
+## 8. Algorithmic Differences: scICER (R) vs scICE (Julia)
+
+This section summarizes every major algorithmic change introduced in **scICER**
+relative to the original Julia implementation in `scICE/src/scICE.jl`.
+
+### 8.1 Resolution Search Architecture
+
+| Aspect | Julia (`scICE.jl`) | R (`scICER`) |
+|--------|---------------------|--------------|
+| Strategy | Per-target sequential binary search; each target `k` runs its own left/right bisection from shared narrowing bounds | Shared global gamma sweep: one upper-cap discovery pass + one coarse sweep + iterative refinement rounds, deriving per-target gamma intervals from the shared probe curve |
+| Probe count per gamma step | Full `N_cls` (10) preliminary Leiden calls per gamma midpoint | One representative Leiden call per gamma step; nominal trial count filled by repeating that single result |
+| Search direction | Alternates between the smallest and largest remaining targets ("center-out" pinch) | Sweeps the full gamma axis once, then refines unresolved intervals with densified probe grids |
+| Convergence criterion | Tolerance-based: stops when `exp(left) ≈ exp(right)` (CPM) | Coverage-based: stops when all requested targets are optimization-ready, the requested maximum is covered, or two consecutive refinement rounds produce no progress |
+| Upper bound for CPM | Fixed to `exp(0) = 1` (log-space range `[log(tol), 0]`) | Adaptive upper-cap discovery that grows geometrically in parallel batches (up to 6 probes/round), narrowing step ratio as the observed final count approaches the requested maximum |
+| Degenerate-gamma handling | None | Detects "high-gamma degenerate" probes (effective = 0, raw ≈ n_vertices, final = 1) and stops discovery after two consecutive degenerate probes past a non-degenerate region |
+
+### 8.2 Cluster Counting Model
+
+| Aspect | Julia | R |
+|--------|-------|---|
+| Cluster count definition | Raw count only: `maximum(X, dims=2) + 1` (0-based label max + 1) | Dual-count model: **effective count** (clusters with size ≥ `min_cluster_size`) and **raw count** (`length(unique(labels))`); plus a **final merged count** after the small-cluster merge pass |
+| Search target semantics | `cluster_range` values are raw cluster counts | `cluster_range` values are **final merged** cluster counts; effective count drives the main objective, raw count serves as guardrail and fallback |
+| `min_cluster_size` parameter | Does not exist | Default 2; controls effective counting, raw-cluster guard thresholds, and final merge behavior |
+
+### 8.3 Gamma Admission and Candidate Selection
+
+| Aspect | Julia | R |
+|--------|-------|---|
+| Admission rule | Simple equality: `median(max_labels + 1) == k` | 9-level ordered admission ladder: `raw_strict_soft → strict_soft → relaxed_soft → strict_hard → relaxed_hard → relaxed_unguarded → raw_relaxed_soft → raw_relaxed_hard → raw_relaxed_unguarded` |
+| Strict vs relaxed | Not distinguished | Strict = `as.integer(median) == k`; Relaxed = `any_hit_count >= 1 && abs(median - k) <= 1` |
+| Raw-cluster guard | Not used | Soft guard: `raw_median <= max(k+3, ceil(k*1.1))`; Hard guard: `raw_median <= max(k+5, ceil(k*1.5))` |
+| Multi-gamma tie-breaking | Not needed (single gamma per target after median filter) | When the winning admission family contains multiple gammas and `min_cluster_size > 1`, retain only gammas with the smallest raw-median gap to the target |
+
+### 8.4 Gamma Budget and Evaluation Strategy
+
+| Aspect | Julia | R |
+|--------|-------|---|
+| Gamma sequence | Fixed `n_steps` (default 11) evenly spaced in log-space between the per-target bounds | Two-stage budget: up to 8 **primary** gammas (anchors + exact-hit seeds + near-hit seeds + interior fill) + up to 4 **secondary** gammas placed at the largest uncovered gaps; total Phase-1 cap = 12 |
+| Seed-aware scheduling | Not used | Primary gamma set incorporates exact-hit and near-hit probes from the shared resolution search; CPM candidates are thinned in log-space to avoid near-duplicates |
+| Early stopping | Not applicable | Secondary gammas are only evaluated when the primary batch yields no guarded admission family and no exact final-hit trial |
+
+### 8.5 Iterative Refinement (Phase 4)
+
+| Aspect | Julia | R |
+|--------|-------|---|
+| Warm-start Leiden | Uses `init_mem` (previous membership) to warm-start each trial at each gamma; increases `k` by `dN=2` each round | Warm-starts Leiden from previous memberships with `delta_n = 2` per round |
+| Convergence detector | Sliding window (`tank_bic_all`, 10-column history): converged when all diff columns are zero, or when IC = 1, or when `k > 100` and `median(IC) > 1.1`, or when `k >= max_iter` | Same conceptual logic but with **admission-mode-aware iteration caps**: `relaxed_unguarded / raw_relaxed_unguarded` → at most 2 rounds; all other modes → at most 3 rounds |
+| Survivor pruning | Keeps gammas passing `IC <= quantile(IC, 0.5)` or still unstable; always keeps argmin | Round-dependent caps: after round 1, keep at most 4 gammas; after round 2+, keep at most 2 gammas |
+| Skip condition | None (always enters the loop unless IC = 1) | Skipped when `admitted_count <= 2 && best_ic <= 1.005 && exact_hit_count > 0` |
+
+### 8.6 ECS / IC / MEI Computation
+
+| Aspect | Julia | R |
+|--------|-------|---|
+| ECS implementation | Pure Julia `simmat_v2()` using personalized-PageRank-style L1 distance with memoization across cluster-pair (i1, i2) combinations | Delegates to **ClustAssess** C++ backend (`element_sim_elscore()`) with compact integer relabeling; avoids the known negative-value bug in `ClustAssess::element_sim()` on large flat partitions by computing `mean(element_sim_elscore(...))` |
+| IC formula | `1 / dot(S_ab * prob, prob)` — **reciprocal** of the probability-weighted similarity | `dot(S_ab * prob, prob)` — **direct** probability-weighted similarity (no reciprocal); IC = 1 means perfect consistency, higher means less stable |
+| Parallelism in ECS | `pmap` over upper-triangle pairs using `CachingPool` | Sequential double loop in R; parallelism is at the outer gamma/target level, not within individual ECS computations |
+| MEI formula | `sum(S_ij * (p_i + p_j), dims=2) / (n_clusterings - 1)` — weight each pair by the **sum** of their probabilities | `sum(2 * p_i * p_j * S_ij_elementwise)` plus diagonal `sum(p^2)` — weight each pair by the **product** of their probabilities |
+
+### 8.7 Small-Cluster Handling
+
+| Aspect | Julia | R |
+|--------|-------|---|
+| Final merge | Does not exist; returned labels are raw Leiden output | `merge_small_clusters_to_neighbors()`: one-pass deterministic merge of undersized clusters to the large-cluster neighbor with highest mean SNN connectivity; contiguous 0-based relabeling after merge |
+| All-undersized edge case | Not handled | Collapses all cells to the largest cluster (ties broken by smallest id) |
+| Merge scope | — | Applied only to `best_labels`; IC/MEI are always computed on raw (unmerged) trial labels |
+
+### 8.8 Result Keying and Deduplication
+
+| Aspect | Julia | R |
+|--------|-------|---|
+| Result key | Median cluster count (raw) as reported by the optimization loop | **Final merged cluster count** after the small-cluster merge on `best_labels` |
+| Duplicate handling | Not explicit; results are appended per target | If multiple requested targets collapse to the same final merged count, keep only the lowest-IC solution; the full trace is preserved in `target_diagnostics` |
+| `resolution` mode | Does not exist | Dedicated fixed-gamma evaluation path: no resolution search, no admission ladder, no Phase 4 refinement; per-final-cluster deduplication keeping the lowest-IC gamma |
+
+### 8.9 Bootstrap IC
+
+| Aspect | Julia | R |
+|--------|-------|---|
+| Procedure | Resamples rows of `X_list` (trial labels matrix), re-extracts and recomputes IC, repeats `n_boot` times | Resamples **columns** of the best clustering matrix, recomputes IC distribution; uses median as the reported `ic_median` |
+| Scope | Per-target, after Phase 4 convergence | Same scope, but bootstrap resamples the existing best clustering matrix without running additional Leiden calls |
+
+### 8.10 Pre-Optimization Filtering
+
+| Aspect | Julia | R |
+|--------|-------|---|
+| Mechanism | Filters out targets where `min(IC) >= remove_threshold` from gamma probes that fell within the target's resolution range during the binary search | Separate optional stage (`remove_threshold`): samples a few gamma points in each range, computes IC, excludes targets exceeding the threshold; skippable with `remove_threshold = Inf` |
+| Result | Filtered targets are printed and excluded from optimization | Filtered targets retained as metadata entries (`excluded = TRUE`) with `exclusion_reason`; not optimized but included in the returned object |
+
+### 8.11 Parallelism Model
+
+| Aspect | Julia | R |
+|--------|-------|---|
+| Backend | Julia `Distributed` + `pmap` with `CachingPool`; workers share `@everywhere` globals | Fork-based `mclapply` on Unix; forced to sequential on Windows |
+| Worker budget allocation | Flat: all workers available for each level of parallelism | Hierarchical split: outer `k`-level queue workers + per-`k` nested workers for gamma evaluation and bootstrap |
+| Queue scheduling | Not explicit | Outer optimization uses `mc.preschedule = FALSE` (dynamic) to reduce long-tail imbalance |
+| Graph distribution | `@everywhere rg_all = $rigg` — broadcasts igraph object to all workers | No explicit broadcast; forked processes inherit the parent graph object |
+
+### 8.12 Seurat Integration and Input/Output
+
+| Aspect | Julia | R |
+|--------|-------|---|
+| Input | Dictionary (`a_dict`) containing graph objects; supports `umap`, `snn`, `knn`, `harmony`, `testg` graph types | Seurat object; extracts graph via `object@graphs[[graph_name]]` with default `<DefaultAssay>_snn`; validates inheritance from `Seurat` class |
+| Graph conversion | `graph2ig()`: Julia sparse → Python `scipy.sparse.coo_matrix` → Python `igraph` | `graph_to_igraph()`: reads sparse Matrix slots (`@i`, `@p`, `@x`) directly → R `igraph` undirected weighted graph |
+| Output | Mutates input dictionary in-place with `:gamma`, `:labels`, `:ic`, etc. | Returns a new S3 `scICE` object with named fields; annotates `consistent_clusters`, `analysis_mode`, `target_diagnostics`, `resolution_diagnostics` |
+| Leiden backend | Python `igraph.community_leiden()` via PyCall | R `igraph::cluster_leiden()` via the igraph R package |
+
+### 8.13 Diagnostics and Observability
+
+| Feature | Julia | R |
+|---------|-------|---|
+| Logging | `ProgressMeter` progress bars with `:searching`, `:γ`, `:IC`, `:N_Iterations` display values | Timestamped `scice_message()` with per-stage, per-probe, and per-phase diagnostics |
+| Search diagnostics | Not recorded | Full `resolution_search_diagnostics` data frame recording `probe_stage`, elapsed time, pid, discovery round, degenerate flags, interval widths, and per-interval probe allocations |
+| Optimization diagnostics | Not recorded | Per-target: `phase1_primary_gamma_count`, `phase1_secondary_gamma_count`, `phase1_elapsed_sec`, `phase1_leiden_runs`, `phase4_iterations`, `phase4_elapsed_sec`, `phase5_elapsed_sec`, `optimization_elapsed_sec` |
+| Target tracing | Not available | `target_diagnostics` preserves one row per requested target including excluded/failed/superseded targets |
+
+### 8.14 Seed and Reproducibility
+
+| Aspect | Julia | R |
+|--------|-------|---|
+| Seed model | Not explicitly parameterized in the public API; relies on Julia's global RNG state | Explicit `seed` parameter; derives stage-specific seeds for search probes, gamma trials, and bootstrap using modular arithmetic from the root seed |
+| Probe-level seeding | Not available | Each resolution-search probe and each manual-resolution gamma evaluation gets a deterministic derived seed |
+### 8.15 Target Cluster Count Coverage and Truthfulness
+
+This is one of the most practically important differences between the two
+implementations.
+
+**Julia scICE: silent skip on mismatch, no output guarantee.**
+
+In Julia `clustering!()`, gamma candidates are filtered by a hard equality test:
+
+```julia
+b_idx = mn_arr .== i   # keep only gammas where median cluster count == target
+```
+
+If no gamma produces a median cluster count exactly equal to the target `k`, that
+target is silently skipped (`continue`), producing no output at all. There is no
+fallback, no relaxation, and no diagnostic record of the miss. Additionally, the
+returned `best_l` is a raw Leiden trial output whose actual cluster count may
+differ from the median used for filtering — and since there is no small-cluster
+merge, noisy single-cell "clusters" are included in the final labels without
+correction.
+
+**scICER: multi-level fallback with truthful output.**
+
+scICER addresses this limitation through several reinforcing mechanisms:
+
+1. **9-level admission ladder.** Instead of a single equality test, scICER
+   progressively relaxes the match criterion through nine ordered families
+   (`raw_strict_soft → strict_soft → relaxed_soft → … → raw_relaxed_unguarded`).
+   This dramatically increases the probability that at least one gamma is
+   admitted for every requested target.
+
+2. **Dual effective / raw counting with bounded fallback.**  When the effective-
+   count families are empty, scICER falls back to raw-count families with soft
+   and hard guard ceilings, providing additional rescue paths that the Julia
+   version does not have.
+
+3. **Small-cluster merge ensures label truthfulness.**  After selecting
+   `best_labels`, scICER applies `merge_small_clusters_to_neighbors()` to
+   deterministically reassign undersized clusters based on SNN connectivity.
+   The reported `n_cluster` is then rekeyed to the **actual final merged cluster
+   count**, so the output never claims a cluster count that the labels do not
+   support.
+
+4. **Explicit failure reporting.**  If all nine admission families are empty,
+   scICER returns an explicit `optimization_admission_failed` result with full
+   diagnostics, rather than silently dropping the target.
+
+5. **Target diagnostics preserve the full trace.**  Every requested target gets
+   a row in `target_diagnostics`, including targets that were excluded by
+   filtering, failed during optimization, or were superseded by a lower-IC
+   solution at the same final merged count. This provides complete audit
+   traceability that the Julia version lacks.
+
+**Net effect:** scICER covers significantly more requested targets than the Julia
+version, and the targets it does return are always truthful — the reported
+`n_cluster` exactly matches the number of clusters in `best_labels`.  When a
+requested target cannot be realized, the failure is documented rather than
+silently hidden.
