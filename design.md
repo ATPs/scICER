@@ -19,6 +19,8 @@ Seurat readiness compatibility updates on 2026-03-18, and the
 final-merged-count rekeying plus cluster-range auto-expansion updates on
 2026-03-18.
 
+For the AnnData/Python counterpart, see [**scICEpy**](https://github.com/ATPs/scICEpy).
+
 ## 1.1 Current Source Layout
 
 The implementation is now split across several focused files in `R/`:
@@ -140,6 +142,28 @@ The public result object is keyed by the second quantity:
 This means a user-visible result is always truthful about the final labels: if
 a requested target of 9 ultimately merges down to 7 clusters, the main result is
 stored under 7, not 9.
+
+## 2.2 Resolution-Mode Summary
+
+Manual `resolution` mode is a fixed-gamma execution path, not a replay of the
+`cluster_range` optimizer.
+
+When `resolution` is supplied, scICER:
+
+1. removes duplicated gamma values before evaluation,
+2. skips shared gamma search and target-`k` optimization admission,
+3. evaluates each remaining gamma independently with repeated Leiden trials,
+4. computes per-gamma Phase 1 IC and bootstrap IC summaries,
+5. groups evaluated gamma values by `best_labels_final_cluster_count` and keeps
+   only the lowest-IC gamma for each final cluster number in the main result,
+6. keeps all evaluated gamma rows in `resolution_diagnostics`.
+
+Two consequences matter for users:
+
+- `resolution = old_results$gamma` is not guaranteed to reproduce the public
+  output of a previous `cluster_range` run.
+- `resolution` mode does not use the multi-gamma admission ladder or Phase 4
+  iterative refinement used by `optimize_clustering()`.
 
 ## 3. Public API: Parameter-by-Parameter
 

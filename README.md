@@ -8,6 +8,8 @@
 
 **scICER** is an R package that implements a systematic and efficient workflow to evaluate clustering consistency in single-cell RNA-seq data. This is the R port of the original [scICE Julia package](https://github.com/Mathbiomed/scICE), designed to be fully compatible with the [Seurat](https://satijalab.org/seurat/) ecosystem.
 
+The AnnData/Python counterpart is [**scICEpy**](https://github.com/ATPs/scICEpy).
+
 ### Key Features
 
 - 🔬 **Automated Cluster Evaluation**: Systematically tests multiple cluster numbers to find consistent results
