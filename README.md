@@ -102,8 +102,8 @@ library(foreach)
 library(doParallel)
 library(ggplot2)
 
-# Set up parallel processing (optional, but recommended)
-n_workers <- 4  # adjust based on your system
+# Set up a parallel worker budget (optional, but recommended)
+n_workers <- 4  # start conservatively and adjust based on your system
 
 # Load your Seurat object
 data(pbmc_small)  # Example dataset
@@ -199,6 +199,40 @@ The script accepts both environment variables and explicit CLI flags such as
 `--qread_threads`, `--n_workers`, `--cluster_range`, and `--resolution`.
 If `--output_qs` is omitted, it defaults to `--input_qs`.
 
+### Worker and CPU Usage
+
+`n_workers` is a scICER worker budget, not a strict upper bound on total CPU
+cores or OS processes. In `cluster_range` mode, scICER can run outer workers for
+different target cluster numbers and nested workers for gamma evaluation,
+iterative refinement, or bootstrap steps. These nested `parallel::mclapply()`
+calls can make the observed process count or CPU usage higher than `n_workers`.
+Native libraries used by R packages, especially igraph/Leiden backends, may also
+use OpenMP or BLAS threads unless they are limited by the environment.
+
+Most users do not need to tune these settings for ordinary local runs. They
+matter mainly on shared servers, scheduled jobs, or environments with strict CPU
+limits.
+
+Practical recommendations:
+
+- Set `n_workers` below your scheduler CPU allocation when using broad
+  `cluster_range` values or large `n_trials`/`n_bootstrap`.
+- Limit native library threading before starting R, for example:
+
+```bash
+export OMP_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export BLIS_NUM_THREADS=1
+Rscript examples/run_scice.R --input_qs input.qs --output_qs output.qs
+```
+
+- Remember that `qs::qread(..., nthread = ...)` or the script option
+  `--qread_threads` is separate from `n_workers`.
+- If your environment enforces a hard CPU cap, prefer a smaller `n_workers`,
+  narrower `cluster_range`, and lower `n_trials`/`n_bootstrap`, then scale up
+  after checking actual CPU and process counts.
+
 ## Detailed Usage
 
 ### 1. Standard Analysis
@@ -208,7 +242,7 @@ If `--output_qs` is omitted, it defaults to `--input_qs`.
 results <- scICE_clustering(
   object = your_seurat_object,
   cluster_range = 2:20,           # Range of cluster numbers to test
-  n_workers = 8,                  # Number of parallel workers  
+  n_workers = 8,                  # scICER worker budget
   n_trials = 15,                  # Clustering trials per resolution
   n_bootstrap = 100,              # Bootstrap iterations
   seed = 42,                      # Optional: Set for reproducible results
@@ -401,7 +435,7 @@ results <- scICE_clustering(
   cluster_range = 5:15,      # Focused range
   n_trials = 8,              # Fewer trials
   n_bootstrap = 50,          # Fewer bootstrap samples
-  n_workers = detectCores() - 1,  # Maximum parallel processing
+  n_workers = detectCores() - 1,  # Worker budget; actual CPU use can be higher
   seed = 42                  # For reproducibility
 )
 ```
