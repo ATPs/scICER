@@ -224,8 +224,16 @@ build_target_gamma_seed_table <- function(target_cluster, gamma_dict,
     data.frame(gamma = gamma_left, seed_role = "left", stringsAsFactors = FALSE),
     data.frame(gamma = gamma_right, seed_role = "right", stringsAsFactors = FALSE),
     data.frame(gamma = selected_gamma, seed_role = "selected", stringsAsFactors = FALSE),
-    data.frame(gamma = exact_probe_values, seed_role = "exact", stringsAsFactors = FALSE),
-    data.frame(gamma = near_probe_values, seed_role = "near", stringsAsFactors = FALSE)
+    data.frame(
+      gamma = exact_probe_values,
+      seed_role = rep("exact", length(exact_probe_values)),
+      stringsAsFactors = FALSE
+    ),
+    data.frame(
+      gamma = near_probe_values,
+      seed_role = rep("near", length(near_probe_values)),
+      stringsAsFactors = FALSE
+    )
   )
   covered_values <- unique(c(gamma_left, gamma_right, selected_gamma, exact_probe_values, near_probe_values))
   generic_seed_values <- setdiff(seed_values, covered_values)
@@ -365,7 +373,7 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   
   # Determine resolution search bounds
   if (objective_function == "modularity") {
-    start_g <- -13
+    start_g <- 0
     end_g <- 20  # Increased for higher cluster numbers
   } else { # CPM
     start_g <- log(resolution_tolerance)
@@ -686,60 +694,143 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
   }
   
   cluster_results <- cross_platform_mclapply(valid_clusters, function(cluster_num) {
-    # Thread-local logging for parallel workers
     worker_id <- paste("WORKER", cluster_num)
-    
-    if (verbose) {
-      scice_message(paste(worker_id, ": Starting optimization for k =", cluster_num))
-      scice_message(paste(worker_id, ": Thread context - PID:", Sys.getpid()))
+
+    build_excluded_result_row <- function(exclusion_reason,
+                                          result_status = exclusion_reason,
+                                          gamma = NA_real_,
+                                          effective_cluster_median = NA_real_,
+                                          raw_cluster_median = NA_real_,
+                                          final_cluster_median = NA_real_,
+                                          admission_mode = result_status,
+                                          best_labels_raw_cluster_count = NA_integer_,
+                                          best_labels_final_cluster_count = NA_integer_,
+                                          n_iter = as.integer(n_iterations),
+                                          k = as.integer(n_iterations),
+                                          phase1_primary_gamma_count = NA_integer_,
+                                          phase1_secondary_gamma_count = NA_integer_,
+                                          phase1_total_gamma_count = NA_integer_,
+                                          phase1_elapsed_sec = NA_real_,
+                                          phase1_leiden_runs = NA_integer_,
+                                          secondary_phase1_used = FALSE,
+                                          exact_hit_gamma_count = NA_integer_,
+                                          phase4_iterations = NA_integer_,
+                                          phase4_elapsed_sec = NA_real_,
+                                          phase5_elapsed_sec = NA_real_,
+                                          optimization_elapsed_sec = NA_real_) {
+      data.table::data.table(
+        cluster_number = cluster_num,
+        gamma = as.numeric(gamma),
+        labels = list(NULL),
+        ic = NA_real_,
+        ic_vec = list(NULL),
+        best_labels = list(NULL),
+        effective_cluster_median = as.numeric(effective_cluster_median),
+        raw_cluster_median = as.numeric(raw_cluster_median),
+        final_cluster_median = as.numeric(final_cluster_median),
+        admission_mode = as.character(admission_mode),
+        best_labels_raw_cluster_count = as.integer(best_labels_raw_cluster_count),
+        best_labels_final_cluster_count = as.integer(best_labels_final_cluster_count),
+        n_iter = as.integer(n_iter),
+        mei = list(NULL),
+        k = as.integer(k),
+        source_target_cluster = cluster_num,
+        excluded = TRUE,
+        exclusion_reason = as.character(exclusion_reason),
+        selected_main_result = FALSE,
+        result_status = as.character(result_status),
+        phase1_primary_gamma_count = as.integer(phase1_primary_gamma_count),
+        phase1_secondary_gamma_count = as.integer(phase1_secondary_gamma_count),
+        phase1_total_gamma_count = as.integer(phase1_total_gamma_count),
+        phase1_elapsed_sec = as.numeric(phase1_elapsed_sec),
+        phase1_leiden_runs = as.integer(phase1_leiden_runs),
+        secondary_phase1_used = isTRUE(secondary_phase1_used),
+        exact_hit_gamma_count = as.integer(exact_hit_gamma_count),
+        phase4_iterations = as.integer(phase4_iterations),
+        phase4_elapsed_sec = as.numeric(phase4_elapsed_sec),
+        phase5_elapsed_sec = as.numeric(phase5_elapsed_sec),
+        optimization_elapsed_sec = as.numeric(optimization_elapsed_sec)
+      )
     }
-    
-    if (!(as.character(cluster_num) %in% names(gamma_dict))) {
+
+    tryCatch({
       if (verbose) {
-        scice_message(paste(worker_id, ": ERROR - No gamma range found for k =", cluster_num))
+        scice_message(paste(worker_id, ": Starting optimization for k =", cluster_num))
+        scice_message(paste(worker_id, ": Thread context - PID:", Sys.getpid()))
       }
-      return(NULL)
-    }
-    
-    gamma_range <- gamma_dict[[as.character(cluster_num)]]
-    
-    if (verbose) {
-      scice_message(paste(worker_id, ": Gamma range [", signif(gamma_range[1], 6), ", ", signif(gamma_range[2], 6), "]", sep = ""))
-      scice_message(paste(worker_id, ": Starting intensive optimization..."))
-      opt_start_time <- Sys.time()
-    }
-    
-    # Optimize clustering within this range
-    gamma_seed_table <- build_target_gamma_seed_table(
-      target_cluster = cluster_num,
-      gamma_dict = gamma_dict,
-      target_gamma_seeds = target_gamma_seeds,
-      target_interval_details = target_interval_details,
-      resolution_search_diagnostics = resolution_search_diagnostics
-    )
-    result <- optimize_clustering(
-      igraph_obj, cluster_num, gamma_range, objective_function,
-      n_trials, n_bootstrap, seed, beta, n_iterations, max_iterations,
-      resolution_tolerance, cluster_worker_budget, snn_graph,
-      gamma_seed_table, min_cluster_size, verbose,
-      worker_id, in_parallel_context = TRUE,
-      runtime_context = runtime_context
-    )
-    
-    if (verbose) {
-      opt_time <- as.numeric(difftime(Sys.time(), opt_start_time, units = "secs"))
-      scice_message(paste(worker_id, ": Optimization completed in", round(opt_time, 3), "seconds"))
-    }
-    
-    if (!is.null(result)) {
-      if (!isTRUE(result$success)) {
+
+      if (!(as.character(cluster_num) %in% names(gamma_dict))) {
+        if (verbose) {
+          scice_message(paste(worker_id, ": ERROR - No gamma range found for k =", cluster_num))
+        }
+        return(NULL)
+      }
+
+      gamma_range <- gamma_dict[[as.character(cluster_num)]]
+
+      if (verbose) {
+        scice_message(paste(worker_id, ": Gamma range [", signif(gamma_range[1], 6), ", ", signif(gamma_range[2], 6), "]", sep = ""))
+        scice_message(paste(worker_id, ": Starting intensive optimization..."))
+        opt_start_time <- Sys.time()
+      }
+
+      gamma_seed_table <- build_target_gamma_seed_table(
+        target_cluster = cluster_num,
+        gamma_dict = gamma_dict,
+        target_gamma_seeds = target_gamma_seeds,
+        target_interval_details = target_interval_details,
+        resolution_search_diagnostics = resolution_search_diagnostics
+      )
+      result <- optimize_clustering(
+        igraph_obj, cluster_num, gamma_range, objective_function,
+        n_trials, n_bootstrap, seed, beta, n_iterations, max_iterations,
+        resolution_tolerance, cluster_worker_budget, snn_graph,
+        gamma_seed_table, min_cluster_size, verbose,
+        worker_id, in_parallel_context = TRUE,
+        runtime_context = runtime_context
+      )
+
+      if (verbose) {
+        opt_time <- as.numeric(difftime(Sys.time(), opt_start_time, units = "secs"))
+        scice_message(paste(worker_id, ": Optimization completed in", round(opt_time, 3), "seconds"))
+      }
+
+      if (!is.null(result)) {
+        if (!isTRUE(result$success)) {
+          return(build_excluded_result_row(
+            exclusion_reason = result$failure_reason,
+            result_status = result$failure_reason,
+            gamma = result$gamma,
+            effective_cluster_median = result$effective_cluster_median,
+            raw_cluster_median = result$raw_cluster_median,
+            final_cluster_median = result$final_cluster_median,
+            admission_mode = result$admission_mode,
+            best_labels_raw_cluster_count = result$best_labels_raw_cluster_count,
+            best_labels_final_cluster_count = result$best_labels_final_cluster_count,
+            n_iter = result$n_iterations,
+            k = result$k,
+            phase1_primary_gamma_count = result$phase1_primary_gamma_count,
+            phase1_secondary_gamma_count = result$phase1_secondary_gamma_count,
+            phase1_total_gamma_count = result$phase1_total_gamma_count,
+            phase1_elapsed_sec = result$phase1_elapsed_sec,
+            phase1_leiden_runs = result$phase1_leiden_runs,
+            secondary_phase1_used = result$secondary_phase1_used,
+            exact_hit_gamma_count = result$exact_hit_gamma_count,
+            phase4_iterations = result$phase4_iterations,
+            phase4_elapsed_sec = result$phase4_elapsed_sec,
+            phase5_elapsed_sec = result$phase5_elapsed_sec,
+            optimization_elapsed_sec = result$optimization_elapsed_sec
+          ))
+        }
+
+        mei_scores <- calculate_mei_from_array(result$labels)
         return(data.table::data.table(
           cluster_number = cluster_num,
           gamma = result$gamma,
-          labels = list(NULL),
-          ic = NA_real_,
-          ic_vec = list(NULL),
-          best_labels = list(NULL),
+          labels = list(result$labels),
+          ic = result$ic_median,
+          ic_vec = list(result$ic_bootstrap),
+          best_labels = list(result$best_labels),
           effective_cluster_median = result$effective_cluster_median,
           raw_cluster_median = result$raw_cluster_median,
           final_cluster_median = result$final_cluster_median,
@@ -747,13 +838,13 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
           best_labels_raw_cluster_count = result$best_labels_raw_cluster_count,
           best_labels_final_cluster_count = result$best_labels_final_cluster_count,
           n_iter = result$n_iterations,
-          mei = list(NULL),
+          mei = list(mei_scores),
           k = result$k,
           source_target_cluster = cluster_num,
-          excluded = TRUE,
-          exclusion_reason = result$failure_reason,
+          excluded = FALSE,
+          exclusion_reason = "none",
           selected_main_result = FALSE,
-          result_status = result$failure_reason,
+          result_status = "candidate",
           phase1_primary_gamma_count = result$phase1_primary_gamma_count,
           phase1_secondary_gamma_count = result$phase1_secondary_gamma_count,
           phase1_total_gamma_count = result$phase1_total_gamma_count,
@@ -767,56 +858,32 @@ clustering_main <- function(igraph_obj, cluster_range, n_workers = max(1, parall
           optimization_elapsed_sec = result$optimization_elapsed_sec
         ))
       }
-      # Calculate MEI scores
-      mei_scores <- calculate_mei_from_array(result$labels)
-      
-      # Return as a data.table row
-      return(data.table::data.table(
-        cluster_number = cluster_num,
-        gamma = result$gamma,
-        labels = list(result$labels),
-        ic = result$ic_median,
-        ic_vec = list(result$ic_bootstrap),
-        best_labels = list(result$best_labels),
-        effective_cluster_median = result$effective_cluster_median,
-        raw_cluster_median = result$raw_cluster_median,
-        final_cluster_median = result$final_cluster_median,
-        admission_mode = result$admission_mode,
-        best_labels_raw_cluster_count = result$best_labels_raw_cluster_count,
-        best_labels_final_cluster_count = result$best_labels_final_cluster_count,
-        n_iter = result$n_iterations,
-        mei = list(mei_scores),
-        k = result$k,
-        source_target_cluster = cluster_num,
-        excluded = FALSE,
-        exclusion_reason = "none",
-        selected_main_result = FALSE,
-        result_status = "candidate",
-        phase1_primary_gamma_count = result$phase1_primary_gamma_count,
-        phase1_secondary_gamma_count = result$phase1_secondary_gamma_count,
-        phase1_total_gamma_count = result$phase1_total_gamma_count,
-        phase1_elapsed_sec = result$phase1_elapsed_sec,
-        phase1_leiden_runs = result$phase1_leiden_runs,
-        secondary_phase1_used = result$secondary_phase1_used,
-        exact_hit_gamma_count = result$exact_hit_gamma_count,
-        phase4_iterations = result$phase4_iterations,
-        phase4_elapsed_sec = result$phase4_elapsed_sec,
-        phase5_elapsed_sec = result$phase5_elapsed_sec,
-        optimization_elapsed_sec = result$optimization_elapsed_sec
-      ))
-    }
-    return(NULL)
+      return(NULL)
+    }, error = function(e) {
+      if (verbose) {
+        scice_message(paste(worker_id, ": ERROR -", conditionMessage(e)))
+      }
+      build_excluded_result_row(
+        exclusion_reason = conditionMessage(e),
+        result_status = "optimizer_error"
+      )
+    })
   }, mc.cores = active_cluster_workers_opt, mc.preschedule = FALSE)
   
+  result_row_flags <- vapply(
+    cluster_results,
+    function(x) inherits(x, "data.frame") || data.table::is.data.table(x),
+    logical(1)
+  )
   if (verbose) {
     optimization_time <- as.numeric(difftime(Sys.time(), optimization_start, units = "secs"))
     scice_message(paste("CLUSTERING_MAIN: All optimization workers completed in", round(optimization_time, 3), "seconds"))
-    successful_count <- sum(!sapply(cluster_results, is.null))
+    successful_count <- sum(result_row_flags)
     scice_message(paste("CLUSTERING_MAIN: Successful optimizations:", successful_count, "/", length(valid_clusters)))
   }
   
   # Combine successful results
-  successful_results_list <- cluster_results[!sapply(cluster_results, is.null)]
+  successful_results_list <- cluster_results[result_row_flags]
   if (length(successful_results_list) > 0) {
     successful_results <- data.table::rbindlist(successful_results_list, fill = TRUE)
   } else {

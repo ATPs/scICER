@@ -234,7 +234,7 @@ run_cluster_range_mode <- function(igraph_obj, requested_cluster_range, n_worker
   }
 
   search_start_g <- if (objective_function == "modularity") {
-    -13
+    0
   } else {
     lower <- log(resolution_tolerance)
     if (lower < -20) lower <- -20

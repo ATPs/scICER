@@ -27,28 +27,18 @@ NULL
 #' @keywords internal
 leiden_clustering <- function(igraph_obj, resolution, objective_function,
                              n_iterations, beta, initial_membership = NULL) {
+  objective_function <- match.arg(objective_function, c("CPM", "modularity"))
   weights <- if (igraph::is_weighted(igraph_obj)) igraph::E(igraph_obj)$weight else NULL
 
-  if (objective_function == "modularity") {
-    result <- igraph::cluster_leiden(
-      igraph_obj,
-      resolution = resolution,
-      weights = weights,
-      n_iterations = n_iterations,
-      beta = beta,
-      initial_membership = initial_membership
-    )
-  } else {
-    result <- igraph::cluster_leiden(
-      igraph_obj,
-      objective_function = "CPM",
-      resolution = resolution,
-      weights = weights,
-      n_iterations = n_iterations,
-      beta = beta,
-      initial_membership = initial_membership
-    )
-  }
+  result <- igraph::cluster_leiden(
+    igraph_obj,
+    objective_function = objective_function,
+    resolution = resolution,
+    weights = weights,
+    n_iterations = n_iterations,
+    beta = beta,
+    initial_membership = initial_membership
+  )
 
   as.integer(igraph::membership(result)) - 1L
 }
