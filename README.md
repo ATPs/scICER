@@ -191,7 +191,7 @@ tail -f scice.log
 
 For very large input objects, `qs::qread()` can be silent for a while before scICER starts.
 The provided `run_scice.R` script prints timestamped checkpoints before and after
-each major step, builds a lightweight Seurat object that keeps only one feature
+each major step, builds a lightweight Seurat object that keeps two features
 plus the requested graph for the clustering phase, deletes the original large
 object before `scICE_clustering()`, then reloads the original object only for
 metadata merge. The final augmented Seurat object is saved with `qs`.
@@ -413,7 +413,7 @@ full object in memory during the entire scICER run. `scICE_clustering()` only
 needs the graph and cell names, so a practical pattern is:
 
 1. read the original object with `qs::qread()`;
-2. build a lightweight Seurat object that keeps only one feature plus the target graph;
+2. build a lightweight Seurat object that keeps two features plus the target graph;
 3. remove the original object and run `gc()` before clustering;
 4. run `scICE_clustering()` on the lightweight object;
 5. reload the original object and add the chosen labels back with `get_robust_labels()`;
@@ -430,16 +430,20 @@ qread_threads <- 40
 
 full_obj <- qs::qread(input_qs, nthread = qread_threads)
 
-# Keep one feature plus the graph so the clustering phase does not hold the
-# full assay/reduction payload in memory.
+# Keep two features plus the graph so the clustering phase does not hold the
+# full assay/reduction payload in memory. Some Seurat v5 Assay5 objects fail
+# when DietSeurat() keeps only one feature.
 assay_name <- DefaultAssay(full_obj)
-keep_feature <- rownames(full_obj[[assay_name]])[1]
+keep_features <- head(rownames(full_obj[[assay_name]]), 2L)
+if (length(keep_features) < 2L || anyNA(keep_features) || any(!nzchar(keep_features))) {
+  stop("Need at least two valid feature names for the lightweight Seurat object.")
+}
 small_obj <- DietSeurat(
   object = full_obj,
   assays = assay_name,
   graphs = graph_name,
   dimreducs = NULL,
-  features = keep_feature,
+  features = keep_features,
   misc = FALSE
 )
 

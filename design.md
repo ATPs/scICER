@@ -19,6 +19,12 @@ Seurat readiness compatibility updates on 2026-03-18, and the
 final-merged-count rekeying plus cluster-range auto-expansion updates on
 2026-03-18.
 
+Repository helper scripts and README examples for very large Seurat objects now
+retain two features, not one, when building `DietSeurat()`-based lightweight
+objects. This does not change `scICE_clustering()` itself; it avoids
+`Assay5`-specific failures seen in some Seurat v5 objects when only one feature
+is kept.
+
 For the AnnData/Python counterpart, see [**scICEpy**](https://github.com/ATPs/scICEpy).
 
 ## 1.1 Current Source Layout

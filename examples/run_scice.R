@@ -131,10 +131,10 @@ parse_bool_string <- function(value, option_label) {
 
 build_light_scice_object <- function(seurat_obj, graph_name) {
   assay_name <- SeuratObject::DefaultAssay(seurat_obj)
-  keep_feature <- rownames(seurat_obj[[assay_name]])[[1]]
+  keep_features <- head(rownames(seurat_obj[[assay_name]]), 2L)
 
-  if (is.null(keep_feature) || !nzchar(keep_feature)) {
-    stop("Failed to determine one feature to retain in the lightweight Seurat object.")
+  if (length(keep_features) < 2L || anyNA(keep_features) || any(!nzchar(keep_features))) {
+    stop("Failed to determine at least two features to retain in the lightweight Seurat object.")
   }
 
   Seurat::DietSeurat(
@@ -142,7 +142,7 @@ build_light_scice_object <- function(seurat_obj, graph_name) {
     assays = assay_name,
     graphs = graph_name,
     dimreducs = NULL,
-    features = keep_feature,
+    features = keep_features,
     misc = FALSE
   )
 }
@@ -154,7 +154,7 @@ print_help <- function() {
     "Purpose:",
     "  Run scICER on a very large Seurat object stored in qs format while reducing",
     "  clustering-phase memory usage. The script reads the full object, keeps only",
-    "  one feature plus the target graph in a lightweight Seurat object, removes",
+    "  two features plus the target graph in a lightweight Seurat object, removes",
     "  the full object before scICE_clustering(), then reloads the original object",
     "  only to merge metadata back in, and finally saves the augmented Seurat object",
     "  back to qs format.",
@@ -231,7 +231,7 @@ print_help <- function() {
     "",
     "What the script does:",
     "  1. qs::qread() the original Seurat object.",
-    "  2. Build a lightweight Seurat object with DietSeurat() that keeps one feature",
+    "  2. Build a lightweight Seurat object with DietSeurat() that keeps two features",
     "     plus the requested graph.",
     "  3. rm(full_object); gc() before clustering to reduce RSS.",
     "  4. Run scICE_clustering(..., verbose = TRUE).",
