@@ -558,7 +558,8 @@ Rscript examples/run_scice.R --input_qs input.qs --output_qs augmented_with_scic
 
 5. **Reproducibility issues**:
    - Always set the `seed` parameter
-   - Keep all other parameters constant
+   - Keep all other parameters constant, including `n_workers`
+   - In `cluster_range` mode, different `n_workers` values can produce different results even with the same `seed`
    - Document parameter values used
 
 ### Performance Optimization
@@ -590,6 +591,14 @@ R package version 1.1.0. https://github.com/ATPs/scICER
 *The original scICE algorithm citation will be added upon publication*
 
 ## Q&A
+
+### Why can results differ when I change `n_workers` even with the same `seed`?
+
+In `cluster_range` mode, `n_workers` can affect the resolution-search probe grid
+and search path. A fixed `seed` controls randomness within a given run
+configuration, but it does not guarantee identical results after changing
+`n_workers`. For exact reruns, keep `n_workers` and other analysis parameters
+unchanged.
 
 ### How does scICER select the final clustering solution?
 
