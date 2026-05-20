@@ -12,6 +12,11 @@ The AnnData/Python counterpart is [**scICEpy**](https://github.com/ATPs/scICEpy)
 
 Implementation details are documented in [`design.md`](./design.md).
 
+### scICER paper
+
+The codes used to generate results in scICER paper are available at GitHub (https://github.com/ATPs/scICER-workflow). 
+
+
 ### Key Features
 
 - 🔬 **Automated Cluster Evaluation**: Systematically tests multiple cluster numbers to find consistent results
@@ -375,9 +380,6 @@ Idents(seurat_obj) <- "clusters_8"
 markers <- FindAllMarkers(seurat_obj)
 ```
 
-### scICER paper
-
-The codes used to generate results in scICER paper are available at GitHub (https://github.com/yerry77/scICER-workflow). 
 
 ## Understanding the Output
 
