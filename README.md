@@ -10,12 +10,20 @@
 
 The AnnData/Python counterpart is [**scICEpy**](https://github.com/ATPs/scICEpy).
 
-Implementation details are documented in [`design.md`](./design.md).
-
 ### Publication
 
 The scICER paper is published in *Bioinformatics Advances*: [https://doi.org/10.1093/bioadv/vbag334](https://doi.org/10.1093/bioadv/vbag334). The [paper PDF](./publication/scICER-paper-Bioinformatics-Advances-2026.pdf), [supplementary figures](./publication/Supplementary%20Figures.pdf), and supplementary tables [S1](./publication/Supplementary%20Table%20S1.xlsx), [S2](./publication/Supplementary%20Table%20S2.xlsx), [S3](./publication/Supplementary%20Table%20S3.xlsx), and [S4](./publication/Supplementary%20Table%20S4.xlsx) are available in this repository. The code used to generate the paper's results is available at [scICER-workflow](https://github.com/ATPs/scICER-workflow).
 
+
+![scICER benchmark results and stability assessment of integrated human pancreas data](./publication/scicer-figure1.jpg)
+
+**Figure 1 from the published paper.** Panels A–D summarize the 48-dataset
+benchmark; E–I show human pancreas data before and after Harmony or scVI
+integration; J–M show bootstrapped IC distributions and selected clustering
+labels. For this validation, K = 9 was selected by the highest ECS to annotated
+cell types among candidates meeting the IC threshold.
+Reproduced from [Yu et al. (2026)](https://doi.org/10.1093/bioadv/vbag334)
+under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 ### Key Features
 
@@ -88,13 +96,6 @@ if (!requireNamespace("devtools", quietly = TRUE))
 devtools::install_github("ATPs/scICER", upgrade = "never")#avoid upgrade packages and use existing ones
 ```
 
-### Load the package
-
-```r
-library(scICER)
-library(Seurat)
-```
-
 ## Quick Start
 
 ### Basic Workflow
@@ -103,8 +104,6 @@ library(Seurat)
 # Load required packages
 library(scICER)
 library(Seurat)
-library(foreach)
-library(doParallel)
 library(ggplot2)
 
 # Set up a parallel worker budget (optional, but recommended)
@@ -121,26 +120,7 @@ seurat_obj <- ScaleData(seurat_obj)
 seurat_obj <- RunPCA(seurat_obj)
 seurat_obj <- FindNeighbors(seurat_obj, dims = 1:20)
 
-# Run scICER analysis
-scice_results <- scICE_clustering(
-  object = seurat_obj,
-  cluster_range = 3:20,
-  n_workers = n_workers,
-  min_cluster_size = 2,  # Default; consistent with Seurat singleton behavior
-  remove_threshold = Inf,
-  verbose = TRUE
-)
-
-# Or evaluate manually chosen gamma values directly
-manual_results <- scICE_clustering(
-  object = seurat_obj,
-  resolution = c(0.2, 0.4, 0.8),
-  n_workers = n_workers,
-  min_cluster_size = 2,
-  verbose = TRUE
-)
-
-# For reproducible results, use the seed parameter
+# Run scICER analysis with a reproducible seed
 scice_results <- scICE_clustering(
   object = seurat_obj,
   cluster_range = 3:20,
@@ -170,15 +150,11 @@ cowplot::plot_grid(plotlist = xl.fig, ncol = 3)
 
 ### Documentation Notes
 
-- `README.md`: quick installation, common usage patterns, and practical examples.
-- [`design.md`](./design.md): implementation-oriented design document for
-  `scICE_clustering()`. It explains the full workflow, parameter semantics,
-  output fields, and important behavior differences between `cluster_range`
-  mode and manual `resolution` mode.
-- Use [`design.md`](./design.md) when you need to understand how results are
-  produced internally, interpret fields such as `resolution_diagnostics`, or
-  understand why `resolution = old_results$gamma` is not a one-to-one replay of
-  a previous `cluster_range` run.
+See the [quickstart vignette](./vignettes/scICER-quickstart.Rmd) for a tutorial
+and [`design.md`](./design.md) for implementation details, parameter semantics,
+output fields, and differences between `cluster_range` and manual `resolution`
+mode, including why `resolution = old_results$gamma` does not replay a previous
+`cluster_range` run exactly.
 
 ### Background Runs and Verbose Logs
 
@@ -240,24 +216,7 @@ Rscript examples/run_scice.R --input_qs input.qs --output_qs output.qs
 
 ## Detailed Usage
 
-### 1. Standard Analysis
-
-```r
-# Comprehensive scICER analysis
-results <- scICE_clustering(
-  object = your_seurat_object,
-  cluster_range = 2:20,           # Range of cluster numbers to test
-  n_workers = 8,                  # scICER worker budget
-  n_trials = 15,                  # Clustering trials per resolution
-  n_bootstrap = 100,              # Bootstrap iterations
-  seed = 42,                      # Optional: Set for reproducible results
-  ic_threshold = 1.005,           # Consistency threshold
-  min_cluster_size = 2,           # Default minimum cells per effective cluster (set 1 to disable)
-  verbose = TRUE                  # Progress messages
-)
-```
-
-### 2. Advanced Parameter Customization
+### 1. Advanced Parameter Customization
 
 ```r
 # Fine-tuned parameters for large datasets
@@ -281,21 +240,15 @@ results <- scICE_clustering(
 It's OK to set a large `remove_threshold` value, because `plot_ic` and `get_robust_labels` all have default `threshold = 1.005`.
 `min_cluster_size = 2` approximates Seurat singleton grouping; use `min_cluster_size = 1` to keep raw Leiden clusters.
 `labels` stay raw for IC/MEI, while `best_labels` receives one final merge pass when `min_cluster_size > 1`.
+
+### 2. Manual Resolution Mode
+
 `resolution` can be a single gamma or a vector of gamma values. When `resolution` is provided, scICER skips the `cluster_range` resolution search, evaluates the supplied gamma values directly, and keeps the lowest-IC result for each final cluster number. If both `resolution` and `cluster_range` are provided, `resolution` takes priority and `cluster_range` is ignored with an informational message.
 
-### 3. Manual Resolution Mode
+`resolution_diagnostics` retains one row per input gamma, including gamma values
+that were not retained in the main result after deduplication by cluster number.
 
 ```r
-# Evaluate one user-provided gamma
-result_single_resolution <- scICE_clustering(
-  object = your_seurat_object,
-  resolution = 0.2,
-  n_trials = 15,
-  n_bootstrap = 100,
-  min_cluster_size = 2,
-  seed = 42
-)
-
 # Evaluate several user-provided gamma values
 results_manual <- scICE_clustering(
   object = your_seurat_object,
@@ -315,20 +268,9 @@ results_manual$resolution_diagnostics
 # Lowest-IC returned solution
 results_manual$best_cluster
 results_manual$best_resolution
-
-# resolution takes priority if cluster_range is also supplied
-results_manual2 <- scICE_clustering(
-  object = your_seurat_object,
-  cluster_range = 3:10,
-  resolution = c(0.15, 0.3, 0.6),
-  n_trials = 15,
-  n_bootstrap = 100,
-  min_cluster_size = 2,
-  seed = 42
-)
 ```
 
-### 4. Visualization and Results
+### 3. Visualization and Results
 
 ```r
 # Plot Inconsistency Coefficient (IC) scores
@@ -350,27 +292,12 @@ labels_df <- get_robust_labels(results)
 seurat_obj <- get_robust_labels(results, return_seurat = TRUE, object = seurat_obj)
 ```
 
-### 4. Integration with Seurat Workflow
+### 4. Continue with Seurat
+
+After adding labels to `seurat_obj` in the basic workflow, select a returned
+`clusters_<K>` column for visualization and marker analysis (8 is illustrative):
 
 ```r
-# Complete Seurat + scICER workflow
-seurat_obj <- CreateSeuratObject(counts = your_counts)
-seurat_obj <- NormalizeData(seurat_obj)
-seurat_obj <- FindVariableFeatures(seurat_obj)
-seurat_obj <- ScaleData(seurat_obj)
-seurat_obj <- RunPCA(seurat_obj)
-seurat_obj <- FindNeighbors(seurat_obj, dims = 1:20)
-
-# Run scICER with reproducibility
-scice_results <- scICE_clustering(
-  seurat_obj, 
-  cluster_range = 3:15,
-  seed = 42  # For reproducible results
-)
-
-# Add consistent clusters to Seurat object
-seurat_obj <- get_robust_labels(scice_results, return_seurat = TRUE, object = seurat_obj)
-
 # Continue with standard Seurat analysis
 seurat_obj <- RunUMAP(seurat_obj, dims = 1:20)
 DimPlot(seurat_obj, group.by = "clusters_8")  # Use consistent clustering
@@ -402,26 +329,14 @@ The `scICE_clustering()` function returns a list containing:
 - `best_resolution`: Gamma corresponding to `best_cluster`
 
 `scICE_clustering()` returns a lightweight results object and does not store the full
-Seurat input object. When you need metadata columns added back, pass the original
-Seurat object explicitly:
-
-```r
-seurat_obj <- get_robust_labels(results, return_seurat = TRUE, object = seurat_obj)
-```
-
-In `resolution` mode, `resolution_diagnostics` keeps one row per input gamma, while the main result object is deduplicated by final cluster number so that each returned cluster number retains only the lowest-IC gamma.
+Seurat input object. Pass the original Seurat object to
+`get_robust_labels(..., return_seurat = TRUE, object = seurat_obj)` as shown above.
 
 ### Interpretation Guidelines
 
 - **IC < 1.005**: Highly consistent clustering (recommended), less than 0.5% of cells is inconsistent.
 - **IC 1.005-1.01**: Moderately consistent clustering, 0.5% to 1% of cells is inconsistent.
 - **IC > 1.01**: Low consistency (not recommended), more than 1% of cells is inconsistent.
-
-### Visualization Outputs
-
-- **IC Plot**: Shows consistency scores across cluster numbers
-- **Stability Plot**: Displays bootstrap distributions
-- **UMAP/t-SNE**: Visualize clusters with consistent labels
 
 ## Performance Tips
 
@@ -525,13 +440,6 @@ SCICE_N_BOOTSTRAP=10 \
 Rscript examples/run_scice.R --input_qs input.qs --output_qs augmented_with_scice.qs
 ```
 
-### Memory Management
-
-- Reduce `n_trials` and `n_bootstrap` for memory-limited systems
-- Use focused `cluster_range` based on biological expectations
-- Install the `leiden` package for improved performance
-- Use `get_recommended_parameters()` for optimal settings
-
 ## Troubleshooting
 
 ### Common Issues
@@ -549,37 +457,15 @@ Rscript examples/run_scice.R --input_qs input.qs --output_qs augmented_with_scic
    - Check preprocessing quality
    - Use `create_results_summary()` for detailed analysis
 
-3. **Memory issues**: 
-   - Reduce `n_workers`, `n_trials`, or `cluster_range`
-   - Use `get_recommended_parameters()` for guidance
+3. **Memory or runtime issues**:
+   - Follow [Performance Tips](#performance-tips) for parameter recommendations and lightweight Seurat objects.
+   - See [Worker and CPU Usage](#worker-and-cpu-usage) when choosing a worker budget.
 
-4. **Slow performance**: 
-   - Install the `leiden` package
-   - Increase `n_workers`
-   - Use recommended parameters for your dataset size
-
-5. **Reproducibility issues**:
+4. **Reproducibility issues**:
    - Always set the `seed` parameter
    - Keep all other parameters constant, including `n_workers`
-   - In `cluster_range` mode, different `n_workers` values can produce different results even with the same `seed`
+   - In `cluster_range` mode, `n_workers` affects the resolution-search probe grid and search path, so changing it can produce different results even with the same `seed`
    - Document parameter values used
-
-### Performance Optimization
-
-```r
-# Check if leiden package is available
-if (requireNamespace("leiden", quietly = TRUE)) {
-  message("leiden package detected - enhanced performance available")
-} else {
-  message("Consider installing 'leiden' package for better performance")
-}
-
-# Validate Seurat object preprocessing
-check_seurat_ready(seurat_obj)
-
-# Get recommended parameters
-params <- get_recommended_parameters(ncol(seurat_obj))
-```
 
 ## Citation
 
@@ -589,34 +475,15 @@ Beirui Yu, Donggang Xu, Zhangrui Shi, Muyang Li, Yuli Zheng, Xiaolong Cao, scICE
 
 ## Q&A
 
-### Why can results differ when I change `n_workers` even with the same `seed`?
-
-In `cluster_range` mode, `n_workers` can affect the resolution-search probe grid
-and search path. A fixed `seed` controls randomness within a given run
-configuration, but it does not guarantee identical results after changing
-`n_workers`. For exact reruns, keep `n_workers` and other analysis parameters
-unchanged.
-
 ### How does scICER select the final clustering solution?
 
-For each number of clusters (e.g., when testing 3-10 clusters):
-1. The algorithm runs `n_trials` independent clustering attempts (default: 15)
-2. Each trial uses the Leiden algorithm with different random initializations
-3. For each cluster number:
-   - Calculates pairwise similarities between all trial results using Element-Centric Similarity (ECS)
-   - Computes an Inconsistency (IC) score measuring how different the clustering solutions are
-   - A lower IC score indicates more consistent clustering across trials
-4. For cluster numbers with IC scores below your threshold (e.g., < 1.05):
-   - Selects the "best" clustering solution from the trials
-   - The "best" solution is the one with highest average similarity to other solutions (most representative)
-   - This becomes the reported clustering for that number of clusters
-
-So when you get results showing clusters 3-10 have IC scores < 1.05, it means:
-- Each of these cluster numbers produced stable results across different random initializations
-- The reported clustering solution is the most representative one from all trials
-- You can be confident in using these clustering solutions for downstream analysis
-
-If you use `resolution = c(...)`, the same IC logic is applied directly to each supplied gamma. When multiple gamma values collapse to the same final cluster number, scICER keeps the lowest-IC one in the main result and stores all evaluated gamma values in `resolution_diagnostics`.
+For each candidate, scICER compares repeated Leiden partitions using ECS and
+reports an IC score; lower IC means greater consistency across runs. It selects
+the partition with the highest average similarity to the other trials as the
+representative solution. The default consistency threshold is 1.005; stability
+should be considered alongside biological evidence when choosing a cluster
+number. See [Algorithm Overview](#algorithm-overview) for the workflow and
+[Manual Resolution Mode](#2-manual-resolution-mode) for gamma handling.
 
 ### Will increasing n_trials or n_bootstrap improve results?
 
