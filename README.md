@@ -6,15 +6,15 @@
 
 ## Overview
 
-**scICER** is an R package that implements a systematic and efficient workflow to evaluate clustering consistency in single-cell RNA-seq data. This is the R port of the original [scICE Julia package](https://github.com/Mathbiomed/scICE), designed to be fully compatible with the [Seurat](https://satijalab.org/seurat/) ecosystem.
+**scICER** is an R package for evaluating clustering stability in single-cell analyses. It implements scICE-style inconsistency analysis on graphs stored in [Seurat](https://satijalab.org/seurat/) objects, including graphs from integrated workflows. It builds on the original [scICE Julia package](https://github.com/Mathbiomed/scICE).
 
 The AnnData/Python counterpart is [**scICEpy**](https://github.com/ATPs/scICEpy).
 
 Implementation details are documented in [`design.md`](./design.md).
 
-### scICER paper
+### Publication
 
-The codes used to generate results in scICER paper are available at GitHub (https://github.com/ATPs/scICER-workflow). 
+The scICER paper is published in *Bioinformatics Advances*: [https://doi.org/10.1093/bioadv/vbag334](https://doi.org/10.1093/bioadv/vbag334). The [paper PDF](./publication/scICER-paper-Bioinformatics-Advances-2026.pdf), [supplementary figures](./publication/Supplementary%20Figures.pdf), and supplementary tables [S1](./publication/Supplementary%20Table%20S1.xlsx), [S2](./publication/Supplementary%20Table%20S2.xlsx), [S3](./publication/Supplementary%20Table%20S3.xlsx), and [S4](./publication/Supplementary%20Table%20S4.xlsx) are available in this repository. The code used to generate the paper's results is available at [scICER-workflow](https://github.com/ATPs/scICER-workflow).
 
 
 ### Key Features
@@ -585,12 +585,7 @@ params <- get_recommended_parameters(ncol(seurat_obj))
 
 If you use scICER in your research, please cite:
 
-```
-Cao, X. (2024). scICER: Single-cell Inconsistency-based Clustering Evaluation in R. 
-R package version 1.1.0. https://github.com/ATPs/scICER
-```
-
-*The original scICE algorithm citation will be added upon publication*
+Beirui Yu, Donggang Xu, Zhangrui Shi, Muyang Li, Yuli Zheng, Xiaolong Cao, scICER: clustering stability assessment for integrated single-cell analyses, *Bioinformatics Advances*, Volume 6, Issue 1, 2026, vbag334, [https://doi.org/10.1093/bioadv/vbag334](https://doi.org/10.1093/bioadv/vbag334).
 
 ## Q&A
 

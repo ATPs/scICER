@@ -4,5 +4,6 @@
 ^design\.md$
 ^LICENSE\.md$
 ^examples$
+^publication$
 ^tests/test\.large\.R$
 ^tests/test\.resolution\.R$

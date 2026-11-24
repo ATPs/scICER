@@ -1,3 +1,7 @@
+# scICER 1.1.2
+
+* Added the published scICER paper citation and links to the paper, supplementary materials, and analysis workflow.
+
 # scICER 1.1.0
 
 ## Fixes and Improvements
