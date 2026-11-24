@@ -50,6 +50,7 @@ rsconnect/
 
 *.Rproj
 *.rds
+!/publication/readme/zhengmix4757-example.rds
 
 test_*\.R
 *.pdf

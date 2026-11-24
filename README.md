@@ -15,16 +15,6 @@ The AnnData/Python counterpart is [**scICEpy**](https://github.com/ATPs/scICEpy)
 The scICER paper is published in *Bioinformatics Advances*: [https://doi.org/10.1093/bioadv/vbag334](https://doi.org/10.1093/bioadv/vbag334). The [paper PDF](./publication/scICER-paper-Bioinformatics-Advances-2026.pdf), [supplementary figures](./publication/Supplementary%20Figures.pdf), and supplementary tables [S1](./publication/Supplementary%20Table%20S1.xlsx), [S2](./publication/Supplementary%20Table%20S2.xlsx), [S3](./publication/Supplementary%20Table%20S3.xlsx), and [S4](./publication/Supplementary%20Table%20S4.xlsx) are available in this repository. The code used to generate the paper's results is available at [scICER-workflow](https://github.com/ATPs/scICER-workflow).
 
 
-![scICER benchmark results and stability assessment of integrated human pancreas data](./publication/scicer-figure1.jpg)
-
-**Figure 1 from the published paper.** Panels A–D summarize the 48-dataset
-benchmark; E–I show human pancreas data before and after Harmony or scVI
-integration; J–M show bootstrapped IC distributions and selected clustering
-labels. For this validation, K = 9 was selected by the highest ECS to annotated
-cell types among candidates meeting the IC threshold.
-Reproduced from [Yu et al. (2026)](https://doi.org/10.1093/bioadv/vbag334)
-under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
-
 ### Key Features
 
 - 🔬 **Automated Cluster Evaluation**: Systematically tests multiple cluster numbers to find consistent results
@@ -136,16 +126,6 @@ plot_ic(scice_results, threshold = 1.005)
 
 # Extract consistent clustering labels
 seurat_obj <- get_robust_labels(scice_results, return_seurat = TRUE, object = seurat_obj)
-
-# Visualize with consistent clusters, cluster range from 3 to 15
-xl.fig <- list()
-for (n in 3:15) {
-  if (paste0("clusters_", n) %in% colnames(seurat_obj@meta.data)){
-    xl.fig[[paste0("clusters_", n)]] <- DimPlot(seurat_obj, group.by = paste0("clusters_", n), label = TRUE) + ggtitle(paste("Clusters:", n))
-  }
-}
-
-cowplot::plot_grid(plotlist = xl.fig, ncol = 3)
 ```
 
 ### Documentation Notes
@@ -241,6 +221,19 @@ It's OK to set a large `remove_threshold` value, because `plot_ic` and `get_robu
 `min_cluster_size = 2` approximates Seurat singleton grouping; use `min_cluster_size = 1` to keep raw Leiden clusters.
 `labels` stay raw for IC/MEI, while `best_labels` receives one final merge pass when `min_cluster_size > 1`.
 
+**Choose the graph explicitly.** scICER evaluates a graph already stored in the
+Seurat object. The paper's workflows used the following choices:
+
+| Graph | Typical `graph_name` | Construction |
+| --- | --- | --- |
+| SNN | `RNA_snn`, `SCT_snn`, `sclens_snn` | `FindNeighbors()` on the chosen RNA, SCT or scLENS embedding |
+| KNN | `RNA_nn`, `SCT_nn`, `sclens_nn` | Nearest-neighbor graph from the same `FindNeighbors()` call |
+| UMAP fuzzy graph | `umap_graph` | `uwot::umap(..., ret_extra = "fgraph")` on an existing embedding |
+
+Use `names(seurat_obj@graphs)` to check available names, then pass the chosen
+name to `scICE_clustering(graph_name = ...)`. The example below uses the archived
+UMAP fuzzy graph; `DimPlot(reduction = "umap")` displays its saved coordinates.
+
 ### 2. Manual Resolution Mode
 
 `resolution` can be a single gamma or a vector of gamma values. When `resolution` is provided, scICER skips the `cluster_range` resolution search, evaluates the supplied gamma values directly, and keeps the lowest-IC result for each final cluster number. If both `resolution` and `cluster_range` are provided, `resolution` takes priority and `cluster_range` is ignored with an informational message.
@@ -272,39 +265,76 @@ results_manual$best_resolution
 
 ### 3. Visualization and Results
 
+The examples below use **ZhengMix_4757 (4,688 retained cells)** from the paper's benchmark
+analyses. We reran scICER on its archived UMAP graph with `cluster_range = 2:15`,
+`n_trials = 15`, `n_bootstrap = 100`, `n_workers = 4`, and `seed = 123`.
+To try the plots immediately, load the [small example file](./publication/readme/zhengmix4757-example.rds):
+
 ```r
-# Plot Inconsistency Coefficient (IC) scores
-plot_ic(results, 
-        threshold = 1.005,
-        title = "Clustering Consistency Analysis")
-
-# Plot stability analysis
-plot_stability(results)
-
-# Extract summary of consistent clusters
-summary <- extract_consistent_clusters(results, threshold = 1.005)
-print(summary)
-
-# Get clustering labels as data frame
-labels_df <- get_robust_labels(results)
-
-# Add results directly to Seurat object
-seurat_obj <- get_robust_labels(results, return_seurat = TRUE, object = seurat_obj)
+example_file <- tempfile(fileext = ".rds")
+download.file(
+  "https://raw.githubusercontent.com/ATPs/scICER/main/publication/readme/zhengmix4757-example.rds",
+  example_file, mode = "wb"
+)
+example <- readRDS(example_file)
+results <- example$results
+seurat_obj <- example$object
 ```
+
+For your own data, use the results and Seurat object from your analysis instead.
+
+**Compare candidate cluster numbers with `plot_ic()`.** Boxes and points show
+bootstrap IC distributions; green boxes mark candidates below the consistency
+threshold. Selected Leiden resolutions appear below the cluster numbers.
+
+```r
+set.seed(123)  # Reproduce the jittered point positions.
+p <- plot_ic(results, threshold = 1.005, title = "ZhengMix_4757: clustering consistency")
+p
+ggplot2::ggsave("ic.png", p, width = 9, height = 5.5)
+```
+
+![plot_ic output for ZhengMix_4757](./publication/readme/plot-ic.png)
+
+**Inspect one candidate with `plot_stability()`.** Supply a cluster number to
+view its bootstrap IC distribution. Omit `cluster_number` for an overview of
+IC across all returned cluster numbers.
+
+```r
+plot_stability(results, cluster_number = 9)
+```
+
+![plot_stability bootstrap histogram for nine clusters](./publication/readme/plot-stability.png)
+
+**Plot stable labels on the UMAP.** `get_robust_labels()` adds a `clusters_<K>`
+metadata column for each candidate below the threshold. Here, K = 6 illustrates
+one stable solution; choose among stable candidates using biological evidence.
+
+```r
+extract_consistent_clusters(results, threshold = 1.005)
+seurat_obj <- get_robust_labels(
+  results, threshold = 1.005, return_seurat = TRUE, object = seurat_obj
+)
+Seurat::DimPlot(seurat_obj, reduction = "umap", group.by = "clusters_6", label = TRUE)
+```
+
+![UMAP with stable six-cluster labels extracted by get_robust_labels](./publication/readme/cluster-labels.png)
+
+The [figure-generation script](./examples/generate_readme_figures.R) and
+[data notes](./publication/readme/README.md) provide the full reproduction details.
+The example object retains only two expression features for compactness; use
+full expression data for marker analysis.
 
 ### 4. Continue with Seurat
 
-After adding labels to `seurat_obj` in the basic workflow, select a returned
-`clusters_<K>` column for visualization and marker analysis (8 is illustrative):
+For your own analysis, add the labels to the original Seurat object containing
+full expression data, then select a returned `clusters_<K>` column for marker
+analysis (6 is illustrative):
 
 ```r
-# Continue with standard Seurat analysis
-seurat_obj <- RunUMAP(seurat_obj, dims = 1:20)
-DimPlot(seurat_obj, group.by = "clusters_8")  # Use consistent clustering
-
-# Find markers for consistent clusters
-Idents(seurat_obj) <- "clusters_8"
-markers <- FindAllMarkers(seurat_obj)
+full_obj <- get_robust_labels(results, return_seurat = TRUE, object = full_obj)
+Idents(full_obj) <- "clusters_6"
+markers <- FindAllMarkers(full_obj)
 ```
 
 
@@ -334,9 +364,9 @@ Seurat input object. Pass the original Seurat object to
 
 ### Interpretation Guidelines
 
-- **IC < 1.005**: Highly consistent clustering (recommended), less than 0.5% of cells is inconsistent.
-- **IC 1.005-1.01**: Moderately consistent clustering, 0.5% to 1% of cells is inconsistent.
-- **IC > 1.01**: Low consistency (not recommended), more than 1% of cells is inconsistent.
+- **IC < 1.005**: Highly consistent clustering under the default cutoff.
+- **IC 1.005–1.01**: More variability across clustering runs; inspect the bootstrap distribution.
+- **IC > 1.01**: Greater clustering inconsistency. Interpret stability alongside biological evidence.
 
 ## Performance Tips
 
