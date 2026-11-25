@@ -265,40 +265,26 @@ results_manual$best_resolution
 
 ### 3. Visualization and Results
 
-The examples below use **ZhengMix_4757 (4,688 retained cells)** from the paper's benchmark
-analyses. We reran scICER on its archived UMAP graph with `cluster_range = 2:15`,
-`n_trials = 15`, `n_bootstrap = 100`, `n_workers = 4`, and `seed = 123`.
-To try the plots immediately, load the [small example file](./publication/readme/zhengmix4757-example.rds):
+These plots use **ZhengMix_4757 (4,688 retained cells)** and its archived UMAP
+graph. Download the [example data](https://raw.githubusercontent.com/ATPs/scICER/main/publication/readme/zhengmix4757-example.rds)
+into your working directory to try them:
 
 ```r
-example_file <- tempfile(fileext = ".rds")
-download.file(
-  "https://raw.githubusercontent.com/ATPs/scICER/main/publication/readme/zhengmix4757-example.rds",
-  example_file, mode = "wb"
-)
-example <- readRDS(example_file)
+example <- readRDS("zhengmix4757-example.rds")
 results <- example$results
 seurat_obj <- example$object
 ```
 
-For your own data, use the results and Seurat object from your analysis instead.
-
-**Compare candidate cluster numbers with `plot_ic()`.** Boxes and points show
-bootstrap IC distributions; green boxes mark candidates below the consistency
-threshold. Selected Leiden resolutions appear below the cluster numbers.
+**Compare clustering consistency.** Lower IC means more consistent clustering;
+the dashed line marks the default cutoff of 1.005.
 
 ```r
-set.seed(123)  # Reproduce the jittered point positions.
-p <- plot_ic(results, threshold = 1.005, title = "ZhengMix_4757: clustering consistency")
-p
-ggplot2::ggsave("ic.png", p, width = 9, height = 5.5)
+plot_ic(results, title = "ZhengMix_4757: clustering consistency")
 ```
 
 ![plot_ic output for ZhengMix_4757](./publication/readme/plot-ic.png)
 
-**Inspect one candidate with `plot_stability()`.** Supply a cluster number to
-view its bootstrap IC distribution. Omit `cluster_number` for an overview of
-IC across all returned cluster numbers.
+**Inspect a candidate's bootstrap IC distribution.**
 
 ```r
 plot_stability(results, cluster_number = 9)
@@ -306,24 +292,20 @@ plot_stability(results, cluster_number = 9)
 
 ![plot_stability bootstrap histogram for nine clusters](./publication/readme/plot-stability.png)
 
-**Plot stable labels on the UMAP.** `get_robust_labels()` adds a `clusters_<K>`
-metadata column for each candidate below the threshold. Here, K = 6 illustrates
-one stable solution; choose among stable candidates using biological evidence.
+**Extract stable labels and show them on the UMAP.** K = 6 is one stable
+candidate; use biological evidence when choosing a solution.
 
 ```r
-extract_consistent_clusters(results, threshold = 1.005)
-seurat_obj <- get_robust_labels(
-  results, threshold = 1.005, return_seurat = TRUE, object = seurat_obj
-)
+seurat_obj <- get_robust_labels(results, return_seurat = TRUE, object = seurat_obj)
 Seurat::DimPlot(seurat_obj, reduction = "umap", group.by = "clusters_6", label = TRUE)
 ```
 
 ![UMAP with stable six-cluster labels extracted by get_robust_labels](./publication/readme/cluster-labels.png)
 
-The [figure-generation script](./examples/generate_readme_figures.R) and
-[data notes](./publication/readme/README.md) provide the full reproduction details.
-The example object retains only two expression features for compactness; use
-full expression data for marker analysis.
+For your own data, use your analysis results and Seurat object in these calls.
+The example retains only two expression features; use full expression data for
+marker analysis. See the [data notes](./publication/readme/README.md) and
+[figure script](./examples/generate_readme_figures.R) for reproduction details.
 
 ### 4. Continue with Seurat
 
